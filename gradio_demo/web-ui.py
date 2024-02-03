@@ -23,8 +23,10 @@ import insightface
 from insightface.app import FaceAnalysis
 
 from style_template import styles
-from pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
+from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLInstantIDPipeline
 from model_util import load_models_xl, get_torch_device, torch_gc
+
+import gc  # Import the garbage collector module
 
 import gradio as gr
 
@@ -40,6 +42,8 @@ app.prepare(ctx_id=0, det_size=(640, 640))
 face_adapter = f'checkpoints/ip-adapter.bin'
 controlnet_path = f'checkpoints/ControlNetModel'
 
+global pipe
+
 controlnet = ControlNetModel.from_pretrained(controlnet_path, torch_dtype=dtype)
 
 def get_model_names():
@@ -52,10 +56,10 @@ def get_model_names():
 
 def assign_last_params():
     global pipe
-    pipe.enable_model_cpu_offload()
+    #pipe.enable_model_cpu_offload()
     #pipe.enable_sequential_cpu_offload()
     pipe.enable_xformers_memory_efficient_attention()
-    pipe.to("cpu")
+    pipe.to(device)
     
     pipe.scheduler = diffusers.EulerDiscreteScheduler.from_config(pipe.scheduler.config)
     pipe.load_ip_adapter_instantid(face_adapter)
@@ -68,8 +72,19 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
     global pipe  # Declare pipe as a global variable to manage it when the model changes
     last_loaded_model_path = pretrained_model_name_or_path  # Track the last loaded model path
 
+    def clear_and_recreate_pipe():
+        global pipe
+        if 'pipe' in globals():
+            print(sys.getrefcount(pipe) - 1)
+            print("Attempt to delete and clear up the current pipe from memory")
+            del pipe
+            gc.collect()  # Explicitly call garbage collection
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()  # Clear CUDA cache to free up GPU memory
+
     
     def load_model(pretrained_model_name_or_path):
+        global pipe
         if pretrained_model_name_or_path.endswith(".ckpt") or pretrained_model_name_or_path.endswith(".safetensors"):
             scheduler_kwargs = hf_hub_download(
                 repo_id="wangqixun/YamerMIX_v8",
@@ -84,7 +99,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
             )
 
             scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
-            return StableDiffusionXLInstantIDPipeline(
+            pipe = StableDiffusionXLInstantIDPipeline(
                 vae=vae,
                 text_encoder=text_encoders[0],
                 text_encoder_2=text_encoders[1],
@@ -95,16 +110,18 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
                 controlnet=controlnet,
             )
         else:
-            return StableDiffusionXLInstantIDPipeline.from_pretrained(
+            pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
                 pretrained_model_name_or_path,
                 controlnet=controlnet,
                 torch_dtype=dtype,
                 safety_checker=None,
                 feature_extractor=None,
             )
+        return pipe
 
     # Load model and display message
     print(f"Loading model: {pretrained_model_name_or_path}")
+    clear_and_recreate_pipe()  # Clear any existing pipe before loading a new one
     pipe = load_model(pretrained_model_name_or_path)
     assign_last_params()
 
@@ -125,13 +142,9 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
 
         # Proceed with reloading the model if it's different from the last loaded model
         if model_to_load != last_loaded_model_path:
-            print(f"Reloading model: {model_to_load}")
             global pipe
-            # Properly discard the old pipe if it exists
-            if hasattr(pipe, 'scheduler'):
-                del pipe.scheduler
-
-            # Load the new model
+            print(f"Reloading model: {model_to_load}")
+            clear_and_recreate_pipe()  # Use the function to clear any existing pipe before loading a new one
             pipe = load_model(model_to_load)
             last_loaded_model_path = model_to_load
             assign_last_params()
@@ -262,7 +275,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
         print(f"[Debug] Prompt: {prompt}, \n[Debug] Neg Prompt: {negative_prompt}")
     
         pipe.set_ip_adapter_scale(adapter_strength_ratio)
-        #pipe.enable_xformers_memory_efficient_attention()
+        
         
 
         for i in range(num_images):
@@ -270,7 +283,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
             if num_images > 1:
                 seed = random.randint(0, MAX_SEED)
             generator = torch.Generator(device=device).manual_seed(seed)
-
+            pipe.enable_xformers_memory_efficient_attention()
             result_images = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -352,7 +365,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", share=False):
             with gr.Column():
                 submit = gr.Button("Submit", variant="primary")
                 prompt = gr.Textbox(label="Prompt", info="Give simple prompt is enough to achieve good face fidelity", placeholder="A photo of a person", value="")
-                negative_prompt = gr.Textbox(label="Negative Prompt", placeholder="low quality", value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, deformed, monochrome")        
+                negative_prompt = gr.Textbox(label="Negative Prompt", placeholder="low quality", value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome")        
                 style = gr.Dropdown(label="Style template", choices=STYLE_NAMES, value=DEFAULT_STYLE_NAME)
         
                 identitynet_strength_ratio = gr.Slider(label="IdentityNet strength (for fidelity)", minimum=0, maximum=1.5, step=0.05, value=0.80)

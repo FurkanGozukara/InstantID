@@ -93,6 +93,7 @@ def get_model_names():
 def assign_last_params():
     global pipe
     #pipe.enable_model_cpu_offload()
+    pipe.enable_xformers_memory_efficient_attention()
     pipe.to(device)
     
     pipe.load_ip_adapter_instantid(face_adapter)
@@ -316,8 +317,8 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         enhance_face_region,
         model_input,
         model_dropdown,
-        width,
-        height,
+        width_target,
+        height_target,
         num_images,
         progress=gr.Progress(track_tqdm=True),
     ):
@@ -348,7 +349,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         prompt, negative_prompt = apply_style(style_name, prompt, negative_prompt)
 
         face_image = load_image(face_image_path)
-        face_image = resize_img(face_image, max_side=1024)
+        face_image = resize_img(face_image,size=(width_target, height_target))
         face_image_cv2 = convert_from_image_to_cv2(face_image)
         height, width, _ = face_image_cv2.shape
 
@@ -368,7 +369,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         img_controlnet = face_image
         if pose_image_path is not None:
             pose_image = load_image(pose_image_path)
-            pose_image = resize_img(pose_image, max_side=1024)
+            pose_image = resize_img(pose_image,size=(width_target, height_target))
             img_controlnet = pose_image
             pose_image_cv2 = convert_from_image_to_cv2(pose_image)
 
@@ -385,7 +386,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
             width, height = face_kps.size
 
         if enhance_face_region:
-            control_mask = np.zeros([height, width, 3])
+            control_mask = np.zeros([height_target, width_target, 3])
             x1, y1, x2, y2 = face_info["bbox"]
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             control_mask[y1:y2, x1:x2] = 255
@@ -407,7 +408,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                 controlnet_scales[s] for s in controlnet_selection
             ]
             control_images = [face_kps] + [
-                controlnet_map_fn[s](img_controlnet).resize((width, height))
+                controlnet_map_fn[s](img_controlnet).resize((width_target, height_target))
                 for s in controlnet_selection
             ]
         else:
@@ -426,6 +427,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
             if num_images > 1:
                 seed = random.randint(0, MAX_SEED)
             generator = torch.Generator(device=device).manual_seed(seed)
+            pipe.enable_xformers_memory_efficient_attention()
             iteration_start_time = time.time()
             result_images = pipe(
                 prompt=prompt,
@@ -436,8 +438,8 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                 controlnet_conditioning_scale=control_scales,
                 num_inference_steps=num_steps,
                 guidance_scale=guidance_scale,
-                height=height,
-                width=width,
+                height=height_target,
+                width=width_target,
                 generator=generator,
             ).images
 
@@ -526,7 +528,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                 negative_prompt = gr.Textbox(
                         label="Negative Prompt",
                         placeholder="low quality",
-                        value="(lowres, low quality, worst quality:1.2), (text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, deformed cat, deformed, photo, anthropomorphic cat, monochrome, pet collar, gun, weapon, blue, 3d, drones, drone, buildings in background, green",
+                        value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
                     )
 
             with gr.Column():
