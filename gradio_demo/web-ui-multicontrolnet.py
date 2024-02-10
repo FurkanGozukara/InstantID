@@ -44,7 +44,7 @@ DEFAULT_STYLE_NAME = "Watercolor"
 app = FaceAnalysis(
     name="antelopev2",
     root="./",
-    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    providers=["CPUExecutionProvider"],
 )
 app.prepare(ctx_id=0, det_size=(640, 640))
 
@@ -92,7 +92,7 @@ def get_model_names():
 
 def assign_last_params():
     global pipe
-    #pipe.enable_model_cpu_offload()
+    
     pipe.enable_xformers_memory_efficient_attention()
     pipe.to(device)
     
@@ -103,6 +103,7 @@ def assign_last_params():
             # load and disable LCM
     pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl")
     pipe.disable_lora()
+    #pipe.enable_model_cpu_offload()
     
     print("Model loaded successfully.")
     if torch.cuda.is_available():
@@ -260,35 +261,64 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         out_img_pil = Image.fromarray(out_img.astype(np.uint8))
         return out_img_pil
 
-    def resize_img(
-        input_image,
-        max_side=1280,
-        min_side=1024,
-        size=None,
-        pad_to_max_side=False,
-        mode=PIL.Image.BILINEAR,
-        base_pixel_number=64,
-    ):
+    def resize_img(input_image, size=None, max_side=1280, min_side=1024, 
+                        pad_to_max_side=False, mode=PIL.Image.BILINEAR, base_pixel_number=64):
         w, h = input_image.size
+    
         if size is not None:
-            w_resize_new, h_resize_new = size
+            #print("size is not none")
+            target_width, target_height = size
+            target_aspect_ratio = target_width / target_height
+            image_aspect_ratio = w / h
+
+            if image_aspect_ratio > target_aspect_ratio:
+                # Image is wider than desired aspect ratio
+                new_width = int(h * target_aspect_ratio)
+                new_height = h
+                left = (w - new_width) / 2
+                top = 0
+                right = (w + new_width) / 2
+                bottom = h
+            else:
+                # Image is taller than desired aspect ratio
+                new_height = int(w / target_aspect_ratio)
+                new_width = w
+                top = 0  # Changed from: top = (h - new_height) / 2
+                left = 0
+                bottom = new_height  # Changed from: bottom = (h + new_height) / 2
+                right = w
+
+            # Crop the image to the target aspect ratio
+            input_image = input_image.crop((left, top, right, bottom))
+            print("input image cropped according to target width and height")
+            w, h = input_image.size  # Update dimensions after cropping
+        
+            # Resize the image to the specified size
+            input_image = input_image.resize(size, mode)
+            input_image.save('temp.png', 'PNG', overwrite=True)
+
         else:
+            # Resize logic when size is not specified
+            #print("size is none")
             ratio = min_side / min(h, w)
             w, h = round(ratio * w), round(ratio * h)
             ratio = max_side / max(h, w)
             input_image = input_image.resize([round(ratio * w), round(ratio * h)], mode)
             w_resize_new = (round(ratio * w) // base_pixel_number) * base_pixel_number
             h_resize_new = (round(ratio * h) // base_pixel_number) * base_pixel_number
-        input_image = input_image.resize([w_resize_new, h_resize_new], mode)
+            input_image = input_image.resize([w_resize_new, h_resize_new], mode)
+            input_image.save('temp2.png', 'PNG', overwrite=True)
 
         if pad_to_max_side:
-            res = np.ones([max_side, max_side, 3], dtype=np.uint8) * 255
-            offset_x = (max_side - w_resize_new) // 2
-            offset_y = (max_side - h_resize_new) // 2
-            res[
-                offset_y : offset_y + h_resize_new, offset_x : offset_x + w_resize_new
-            ] = np.array(input_image)
+            # Create a new image with a white background
+            max_dimension = max(*size) if size else max_side
+            res = np.ones([max_dimension, max_dimension, 3], dtype=np.uint8) * 255
+            w, h = input_image.size
+            offset_x = (max_dimension - w) // 2
+            offset_y = (max_dimension - h) // 2
+            res[offset_y:offset_y + h, offset_x:offset_x + w] = np.array(input_image)
             input_image = Image.fromarray(res)
+
         return input_image
 
     def apply_style(
@@ -428,6 +458,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                 seed = random.randint(0, MAX_SEED)
             generator = torch.Generator(device=device).manual_seed(seed)
             pipe.enable_xformers_memory_efficient_attention()
+            #pipe.enable_model_cpu_offload()
             iteration_start_time = time.time()
             result_images = pipe(
                 prompt=prompt,

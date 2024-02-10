@@ -418,7 +418,7 @@ class LongPromptWeight(object):
         for i in range(len(prompt_token_groups)):
             # get positive prompt embeddings with weights
             token_tensor = torch.tensor([prompt_token_groups[i]], dtype=torch.long, device=pipe.device)
-            weight_tensor = torch.tensor(prompt_weight_groups[i], dtype=torch.float16, device=pipe.device)
+            weight_tensor = torch.tensor(prompt_weight_groups[i], dtype=torch.float32, device=pipe.device)
 
             token_tensor_2 = torch.tensor([prompt_token_groups_2[i]], dtype=torch.long, device=pipe.device)
 
@@ -446,7 +446,7 @@ class LongPromptWeight(object):
             # get negative prompt embeddings with weights
             neg_token_tensor = torch.tensor([neg_prompt_token_groups[i]], dtype=torch.long, device=pipe.device)
             neg_token_tensor_2 = torch.tensor([neg_prompt_token_groups_2[i]], dtype=torch.long, device=pipe.device)
-            neg_weight_tensor = torch.tensor(neg_prompt_weight_groups[i], dtype=torch.float16, device=pipe.device)
+            neg_weight_tensor = torch.tensor(neg_prompt_weight_groups[i], dtype=torch.float32, device=pipe.device)
 
             # use first text encoder
             neg_prompt_embeds_1 = pipe.text_encoder(neg_token_tensor.to(pipe.device), output_hidden_states=True)
@@ -555,7 +555,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
         image_proj_model.eval()
         
-        self.image_proj_model = image_proj_model.to(self.device, dtype=self.dtype)
+        self.image_proj_model = image_proj_model.to(self.device, dtype=torch.float32 if self.device.type == "cpu" else self.dtype)
         state_dict = torch.load(model_ckpt, map_location="cpu")
         if 'image_proj' in state_dict:
             state_dict = state_dict["image_proj"]
@@ -612,8 +612,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
         
-        prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
-                                               dtype=self.image_proj_model.latents.dtype)
+        if self.device.type == 'cuda':
+            prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
+                                                dtype=self.image_proj_model.latents.dtype)
+            
         prompt_image_emb = self.image_proj_model(prompt_image_emb)
 
         bs_embed, seq_len, _ = prompt_image_emb.shape
