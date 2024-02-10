@@ -56,6 +56,9 @@ def get_model_names():
 
 def assign_last_params():
     global pipe
+
+    pipe.enable_vae_slicing()
+    pipe.enable_vae_tiling()
     pipe.enable_model_cpu_offload()
     #pipe.enable_sequential_cpu_offload()
     pipe.enable_xformers_memory_efficient_attention()

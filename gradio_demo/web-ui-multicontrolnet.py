@@ -93,7 +93,7 @@ def get_model_names():
 def assign_last_params():
     global pipe
     
-    pipe.enable_xformers_memory_efficient_attention()
+
     #pipe.to(device)
     
     pipe.load_ip_adapter_instantid(face_adapter)
@@ -103,7 +103,10 @@ def assign_last_params():
             # load and disable LCM
     pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl")
     pipe.disable_lora()
+    pipe.enable_vae_slicing()
+    pipe.enable_vae_tiling()
     pipe.enable_model_cpu_offload()
+    pipe.enable_xformers_memory_efficient_attention()
     
     print("Model loaded successfully.")
     if torch.cuda.is_available():

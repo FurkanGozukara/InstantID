@@ -517,7 +517,7 @@ def draw_kps(image_pil, kps, color_list=[(255,0,0), (0,255,0), (0,0,255), (255,2
     
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
-    def cuda(self, dtype=torch.float16, use_xformers=False):
+    def cuda(self, dtype=torch.float16, use_xformers=True):
         self.to('cuda', dtype)
         
         if hasattr(self, 'image_proj_model'):
