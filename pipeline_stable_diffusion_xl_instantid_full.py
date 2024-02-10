@@ -414,11 +414,12 @@ class LongPromptWeight(object):
             neg_prompt_tokens_2.copy(), neg_prompt_weights_2.copy()
         )
 
+        dtype = torch.float32 if pipe.device.type == 'cpu'else torch.float16
         # get prompt embeddings one by one is not working.
         for i in range(len(prompt_token_groups)):
             # get positive prompt embeddings with weights
             token_tensor = torch.tensor([prompt_token_groups[i]], dtype=torch.long, device=pipe.device)
-            weight_tensor = torch.tensor(prompt_weight_groups[i], dtype=torch.float32, device=pipe.device)
+            weight_tensor = torch.tensor(prompt_weight_groups[i], dtype=dtype, device=pipe.device)
 
             token_tensor_2 = torch.tensor([prompt_token_groups_2[i]], dtype=torch.long, device=pipe.device)
 
@@ -446,7 +447,7 @@ class LongPromptWeight(object):
             # get negative prompt embeddings with weights
             neg_token_tensor = torch.tensor([neg_prompt_token_groups[i]], dtype=torch.long, device=pipe.device)
             neg_token_tensor_2 = torch.tensor([neg_prompt_token_groups_2[i]], dtype=torch.long, device=pipe.device)
-            neg_weight_tensor = torch.tensor(neg_prompt_weight_groups[i], dtype=torch.float32, device=pipe.device)
+            neg_weight_tensor = torch.tensor(neg_prompt_weight_groups[i], dtype=dtype, device=pipe.device)
 
             # use first text encoder
             neg_prompt_embeds_1 = pipe.text_encoder(neg_token_tensor.to(pipe.device), output_hidden_states=True)
@@ -1085,7 +1086,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 if isinstance(self.controlnet, MultiControlNetModel):
                     down_block_res_samples_list, mid_block_res_sample_list = [], []
                     for control_index in range(len(self.controlnet.nets)):
-                        controlnet = self.controlnet.nets[control_index]
+                        controlnet = self.controlnet.nets[control_index].to(device)
                         if control_index == 0:
                             # assume fhe first controlnet is IdentityNet
                             controlnet_prompt_embeds = prompt_image_emb

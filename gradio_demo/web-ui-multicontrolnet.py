@@ -64,13 +64,13 @@ controlnet_depth_model = "diffusers/controlnet-depth-sdxl-1.0-small"
 
 controlnet_pose = ControlNetModel.from_pretrained(
     controlnet_pose_model, torch_dtype=dtype
-).to(device)
+)
 controlnet_canny = ControlNetModel.from_pretrained(
     controlnet_canny_model, torch_dtype=dtype
-).to(device)
+)
 controlnet_depth = ControlNetModel.from_pretrained(
     controlnet_depth_model, torch_dtype=dtype
-).to(device)
+)
 
 controlnet_map = {
     "pose": controlnet_pose,
@@ -94,7 +94,7 @@ def assign_last_params():
     global pipe
     
     pipe.enable_xformers_memory_efficient_attention()
-    pipe.to(device)
+    #pipe.to(device)
     
     pipe.load_ip_adapter_instantid(face_adapter)
     
@@ -103,7 +103,7 @@ def assign_last_params():
             # load and disable LCM
     pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl")
     pipe.disable_lora()
-    #pipe.enable_model_cpu_offload()
+    pipe.enable_model_cpu_offload()
     
     print("Model loaded successfully.")
     if torch.cuda.is_available():
