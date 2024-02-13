@@ -328,6 +328,7 @@ def main(pretrained_model_folder, share=False):
                        model_input, 
                        model_dropdown,
                        enable_CPUOffload,
+                       guidance_threshold,
                        progress=gr.Progress(track_tqdm=True)
     ):
       
@@ -389,16 +390,17 @@ def main(pretrained_model_folder, share=False):
                 guidance_scale=guidance_scale,
                 height=height,
                 width=width,
-                generator=generator
+                generator=generator,
+                end_cfg=guidance_threshold
             ).images
 
-            for img in result_images:
-                current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
-                output_path = f"outputs/{current_time}.png"
-                if not os.path.exists("outputs"):
-                    os.makedirs("outputs")
-                img.save(output_path)
-                images.append(img)
+            image = result_images[0]
+            current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+            output_path = f"outputs/{current_time}.png"
+            if not os.path.exists("outputs"):
+                os.makedirs("outputs")
+            image.save(output_path)
+            images.append(image)
 
             iteration_end = datetime.now()
             iteration_duration = (iteration_end - iteration_start).total_seconds()
@@ -487,6 +489,7 @@ def main(pretrained_model_folder, share=False):
 
                     num_steps = gr.Slider(label="Number of sample steps", minimum=20, maximum=100, step=1, value=30)
                     guidance_scale = gr.Slider(label="Guidance scale", minimum=0.1, maximum=10.0, step=0.1, value=5)
+                    guidance_threshold = gr.Slider(label="Guidance threshold", minimum=0.4, maximum=1, step=0.1, value=1)
                     seed = gr.Slider(label="Seed", minimum=0, maximum=MAX_SEED, step=1, value=42)
                     randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
         
@@ -510,7 +513,7 @@ def main(pretrained_model_folder, share=False):
                         inputs=[
                             face_files, pose_files, prompt, negative_prompt, style, num_steps, 
                             identitynet_strength_ratio, adapter_strength_ratio, guidance_scale, 
-                            seed, width, height, num_images, model_input, model_dropdown, enable_CPUOffload
+                            seed, width, height, num_images, model_input, model_dropdown, enable_CPUOffload,guidance_threshold
                         ],
                         outputs=[gallery, usage_tips]
                     )

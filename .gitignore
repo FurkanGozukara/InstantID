@@ -165,7 +165,8 @@ cython_debug/
 huggingface/
 checkpoints/
 models/
-
+diffusers/
+temp.png
 # Cog
 .cog
 

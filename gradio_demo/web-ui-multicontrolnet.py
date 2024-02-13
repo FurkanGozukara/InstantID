@@ -380,6 +380,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         width_target,
         height_target,
         num_images,
+        guidance_threshold,
         progress=gr.Progress(track_tqdm=True),
     ):
         global controlnet_map, controlnet_map_fn
@@ -443,8 +444,6 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
-        generator = torch.Generator(device=device).manual_seed(seed)
-
         output_dir = "outputs"
         os.makedirs(output_dir, exist_ok=True)
 
@@ -470,17 +469,18 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 num_inference_steps=num_steps,
                 guidance_scale=guidance_scale,
                 height=height_target,
-                width=width_target,
+                width=width_target,                
                 generator=generator,
+                end_cfg=guidance_threshold
             ).images
 
-            for img in result_images:
-                current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
-                output_path = f"outputs/{current_time}.png"
-                if not os.path.exists("outputs"):
-                    os.makedirs("outputs")
-                img.save(output_path)
-                images_generated.append(img)
+            image = result_images[0]
+            current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+            output_path = f"outputs/{current_time}.png"
+            if not os.path.exists("outputs"):
+                os.makedirs("outputs")
+            image.save(output_path)
+            images_generated.append(image)
 
             iteration_end_time = time.time()
             iteration_time = iteration_end_time - iteration_start_time
@@ -692,6 +692,13 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         step=0.1,
                         value=0.0 if enable_lcm_arg else 5.0,
                     )
+                    guidance_threshold = gr.Slider(
+                        label="Guidance threshold",
+                        minimum=0.1,
+                        maximum=1,
+                        step=0.1,
+                        value=1,
+                    )
                     seed = gr.Slider(
                         label="Seed",
                         minimum=0,
@@ -748,7 +755,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     scheduler,
                     enable_LCM,
                     enable_CPUOffload,
-                    enhance_face_region,model_input,model_dropdown,width,height,num_images
+                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold
                 ],
                 outputs=[gallery, usage_tips],
             )
