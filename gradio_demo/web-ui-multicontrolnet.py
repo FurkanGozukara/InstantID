@@ -26,12 +26,12 @@ from huggingface_hub import hf_hub_download
 from insightface.app import FaceAnalysis
 
 from style_template import styles
-from pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
-from model_util import load_models_xl, get_torch_device, torch_gc
-from controlnet_util import openpose, get_depth_map, get_canny_image
+from pipelines.pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
+from model_util import load_models_xl, get_torch_device
+from controlnet_util import load_controlnet, get_depth_map, get_canny_image
+from common.util import clean_memory
 
 import gradio as gr
-
 
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
@@ -39,6 +39,10 @@ device = get_torch_device()
 dtype = torch.float16 if str(device).__contains__("cuda") else torch.float32
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "Watercolor"
+_pretrained_model_folder = None
+default_model = "wangqixun/YamerMIX_v8"
+last_loaded_model = None
+pipe = None
 
 # Load face encoder
 app = FaceAnalysis(
@@ -49,35 +53,26 @@ app = FaceAnalysis(
 app.prepare(ctx_id=0, det_size=(640, 640))
 
 # Path to InstantID models
-face_adapter = f"./checkpoints/ip-adapter.bin"
-controlnet_path = f"./checkpoints/ControlNetModel"
+face_adapter = f"checkpoints/ip-adapter.bin"
+controlnet_path = f"checkpoints/ControlNetModel"
 
 # Load pipeline face ControlNetModel
 controlnet_identitynet = ControlNetModel.from_pretrained(
     controlnet_path, torch_dtype=dtype
 )
 
-# controlnet-pose
-controlnet_pose_model = "thibaud/controlnet-openpose-sdxl-1.0"
-controlnet_canny_model = "diffusers/controlnet-canny-sdxl-1.0"
-controlnet_depth_model = "diffusers/controlnet-depth-sdxl-1.0-small"
+controlnet_map = {}
 
-controlnet_pose = ControlNetModel.from_pretrained(
-    controlnet_pose_model, torch_dtype=dtype
-)
-controlnet_canny = ControlNetModel.from_pretrained(
-    controlnet_canny_model, torch_dtype=dtype
-)
-controlnet_depth = ControlNetModel.from_pretrained(
-    controlnet_depth_model, torch_dtype=dtype
-)
+def load_controlnet_open_pose(pretrained_model_folder):
+    global controlnet_map, controlnet_map_fn
+    openpose, controlnet_pose, controlnet_canny, controlnet_depth = load_controlnet(pretrained_model_folder)      
 
-controlnet_map = {
+    controlnet_map = {
     "pose": controlnet_pose,
     "canny": controlnet_canny,
     "depth": controlnet_depth,
-}
-controlnet_map_fn = {
+    }
+    controlnet_map_fn = {
     "pose": openpose,
     "canny": get_canny_image,
     "depth": get_depth_map,
@@ -92,83 +87,83 @@ def get_model_names():
 
 def assign_last_params():
     global pipe
+    pipe.load_ip_adapter_instantid(face_adapter)    
+    pipe.to(device)
     
-
-    #pipe.to(device)
-    
-    pipe.load_ip_adapter_instantid(face_adapter)
-    
-    
-    pipe.scheduler = diffusers.EulerDiscreteScheduler.from_config(pipe.scheduler.config)
-            # load and disable LCM
-    pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl")
-    pipe.disable_lora()
+    # apply improvements
     pipe.enable_vae_slicing()
-    pipe.enable_vae_tiling()
-    pipe.enable_model_cpu_offload()
+    pipe.enable_vae_tiling()    
     pipe.enable_xformers_memory_efficient_attention()
+
+def load_model(pretrained_model_folder, model_name):
     
-    print("Model loaded successfully.")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    print(f"Loading model: {model_name}")
 
-def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=False, share=False):
-
-    global pipe  # Declare pipe as a global variable to manage it when the model changes
-    
-    last_loaded_model_path = pretrained_model_name_or_path  # Track the last loaded model path
-
-    def load_model(pretrained_model_name_or_path):
-        if pretrained_model_name_or_path.endswith(
-            ".ckpt"
-        ) or pretrained_model_name_or_path.endswith(".safetensors"):
-            scheduler_kwargs = hf_hub_download(
-                repo_id="wangqixun/YamerMIX_v8",
-                subfolder="scheduler",
-                filename="scheduler_config.json",
-            )
-
-            (tokenizers, text_encoders, unet, _, vae) = load_models_xl(
-                pretrained_model_name_or_path=pretrained_model_name_or_path,
-                scheduler_name=None,
-                weight_dtype=dtype,
-            )
-
-            scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
-            pipe = StableDiffusionXLInstantIDPipeline(
-                vae=vae,
-                text_encoder=text_encoders[0],
-                text_encoder_2=text_encoders[1],
-                tokenizer=tokenizers[0],
-                tokenizer_2=tokenizers[1],
-                unet=unet,
-                scheduler=scheduler,
-                controlnet=[controlnet_identitynet],
-            )
-
+    if model_name.endswith(
+        ".ckpt"
+    ) or model_name.endswith(".safetensors"):
+        model_path = model_name
+    else:    
+        if pretrained_model_folder:
+            model_path = fr"{pretrained_model_folder}/{model_name}"
         else:
-            pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
-                pretrained_model_name_or_path,
-                controlnet=[controlnet_identitynet],
-                torch_dtype=dtype,
-                safety_checker=None,
-                feature_extractor=None,
-            )
-
-            pipe.scheduler = diffusers.EulerDiscreteScheduler.from_config(
-                pipe.scheduler.config
-            )
-        return pipe
-
+            model_path = model_name
     
-    print(f"Loading model: {pretrained_model_name_or_path}")
-    pipe = load_model(pretrained_model_name_or_path)
+    if model_name.endswith(
+        ".ckpt"
+    ) or model_name.endswith(".safetensors"):        
+        scheduler_kwargs = hf_hub_download(
+            repo_id="wangqixun/YamerMIX_v8",
+            subfolder="scheduler",
+            filename="scheduler_config.json",            
+        ) if not pretrained_model_folder else hf_hub_download(
+            repo_id="wangqixun/YamerMIX_v8",
+            subfolder="scheduler",
+            filename="scheduler_config.json",            
+            local_dir=fr"{pretrained_model_folder}/wangqixun/YamerMIX_v8",
+            local_dir_use_symlinks=False
+        )
 
-    assign_last_params()
+        (tokenizers, text_encoders, unet, _, vae) = load_models_xl(
+            pretrained_model_name_or_path=model_path,
+            scheduler_name=None,
+            weight_dtype=dtype,
+        )
 
-    def reload_pipe_if_needed(model_input, model_dropdown):
-        nonlocal last_loaded_model_path
+        scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
+        pipe = StableDiffusionXLInstantIDPipeline(
+            vae=vae,
+            text_encoder=text_encoders[0],
+            text_encoder_2=text_encoders[1],
+            tokenizer=tokenizers[0],
+            tokenizer_2=tokenizers[1],
+            unet=unet,
+            scheduler=scheduler,
+            controlnet=[controlnet_identitynet],
+        )
 
+    else:
+        pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
+            model_path,
+            controlnet=[controlnet_identitynet],
+            torch_dtype=dtype,
+            safety_checker=None,
+            feature_extractor=None,
+        )       
+    return pipe
+
+def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
+
+    global _pretrained_model_folder
+    _pretrained_model_folder = pretrained_model_folder
+   
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
+        global pipe  # Declare pipe as a global variable thas_cpu_offloado manage it when the model changes
+        global last_loaded_model
+
+        #load controlnet
+        load_controlnet_open_pose(pretrained_model_folder)
+            
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
 
@@ -177,21 +172,52 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
 
         # Return early if no model is selected or inputted
         if not model_to_load:
-            print("No model selected or inputted. Please select or input a model. Default model will be used.")
-            return
-
+            print("No model selected or inputted. Default model will be used.")
+            model_to_load = default_model
+        
         # Proceed with reloading the model if it's different from the last loaded model
-        if model_to_load != last_loaded_model_path:
-            print(f"Reloading model: {model_to_load}")
-            global pipe
-            # Properly discard the old pipe if it exists
-            if hasattr(pipe, 'scheduler'):
-                del pipe.scheduler
-
+        if not with_cpu_offload:                
             # Load the new model
-            pipe = load_model(model_to_load)
-            last_loaded_model_path = model_to_load
+            pipe = load_model(_pretrained_model_folder, model_to_load)
+            last_loaded_model = model_to_load
             assign_last_params()
+        else:
+            if (model_to_load != last_loaded_model):                      
+                # Properly discard the old pipe if it exists
+                if hasattr(pipe, 'scheduler'):
+                    del pipe.scheduler
+                
+            # Load the new model
+            pipe = load_model(_pretrained_model_folder, model_to_load)
+            last_loaded_model = model_to_load
+            assign_last_params()
+
+        if with_cpu_offload:            
+            pipe.enable_model_cpu_offload()        
+
+        # load and disable LCM
+        lora_model = "latent-consistency/lcm-lora-sdxl" if not _pretrained_model_folder else fr"{_pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
+        pipe.load_lora_weights(lora_model)             
+
+        if with_LCM:
+            pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
+            pipe.enable_lora()
+        else:
+            pipe.disable_lora()        
+            scheduler_class_name = scheduler.split("-")[0]
+
+            add_kwargs = {}
+            if len(scheduler.split("-")) > 1:
+                add_kwargs["use_karras_sigmas"] = True
+            if len(scheduler.split("-")) > 2:
+                add_kwargs["algorithm_type"] = "sde-dpmsolver++"
+            scheduler = getattr(diffusers, scheduler_class_name)
+            pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)
+        
+        pipe.set_ip_adapter_scale(adapter_strength_ratio)
+
+        print("Model loaded successfully.")
+        clean_memory()
 
     def toggle_lcm_ui(value):
         if value:
@@ -347,6 +373,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         seed,
         scheduler,
         enable_LCM,
+        enable_CPUOffload,
         enhance_face_region,
         model_input,
         model_dropdown,
@@ -355,22 +382,8 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         num_images,
         progress=gr.Progress(track_tqdm=True),
     ):
-        reload_pipe_if_needed(model_input, model_dropdown)
-        if enable_LCM:
-            pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
-            pipe.enable_lora()
-        else:
-            pipe.disable_lora()
-            scheduler_class_name = scheduler.split("-")[0]
-
-            add_kwargs = {}
-            if len(scheduler.split("-")) > 1:
-                add_kwargs["use_karras_sigmas"] = True
-            if len(scheduler.split("-")) > 2:
-                add_kwargs["algorithm_type"] = "sde-dpmsolver++"
-            scheduler = getattr(diffusers, scheduler_class_name)
-            pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)
-
+        global controlnet_map, controlnet_map_fn
+       
         if face_image_path is None:
             raise gr.Error(
                 f"Cannot find any input face image! Please upload the face image"
@@ -427,27 +440,8 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
         else:
             control_mask = None
 
-        if len(controlnet_selection) > 0:
-            controlnet_scales = {
-                "pose": pose_strength,
-                "canny": canny_strength,
-                "depth": depth_strength,
-            }
-            pipe.controlnet = MultiControlNetModel(
-                [controlnet_identitynet]
-                + [controlnet_map[s] for s in controlnet_selection]
-            )
-            control_scales = [float(identitynet_strength_ratio)] + [
-                controlnet_scales[s] for s in controlnet_selection
-            ]
-            control_images = [face_kps] + [
-                controlnet_map_fn[s](img_controlnet).resize((width_target, height_target))
-                for s in controlnet_selection
-            ]
-        else:
-            pipe.controlnet = controlnet_identitynet
-            control_scales = float(identitynet_strength_ratio)
-            control_images = face_kps
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
+        control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         generator = torch.Generator(device=device).manual_seed(seed)
 
@@ -456,12 +450,15 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
 
         images_generated = []
         start_time = time.time()
+
+        print("Start inference...")
+        print(f"[Debug] Prompt: {prompt}, \n[Debug] Neg Prompt: {negative_prompt}")
+        
         for i in range(num_images):
             if num_images > 1:
                 seed = random.randint(0, MAX_SEED)
             generator = torch.Generator(device=device).manual_seed(seed)
-            pipe.enable_xformers_memory_efficient_attention()
-            #pipe.enable_model_cpu_offload()
+           
             iteration_start_time = time.time()
             result_images = pipe(
                 prompt=prompt,
@@ -487,14 +484,43 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
 
             iteration_end_time = time.time()
             iteration_time = iteration_end_time - iteration_start_time
+            
             print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")
+            
+            if not enable_CPUOffload and i < (num_images - 1):
+                reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
+                control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        clean_memory()
         print(f"{len(images_generated)} images generated in {total_time:.2f} seconds, average {average_time_per_image:.2f} seconds per image.")
         return images_generated, gr.update(visible=True)
+
+    def set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet):
+        global pipe
+        if len(controlnet_selection) > 0:
+            controlnet_scales = {
+                "pose": pose_strength,
+                "canny": canny_strength,
+                "depth": depth_strength,
+            }
+            pipe.controlnet = MultiControlNetModel(
+                [controlnet_identitynet]
+                + [controlnet_map[s] for s in controlnet_selection]
+            )
+            control_scales = [float(identitynet_strength_ratio)] + [
+                controlnet_scales[s] for s in controlnet_selection
+            ]
+            control_images = [face_kps] + [
+                controlnet_map_fn[s](img_controlnet).resize((width_target, height_target))
+                for s in controlnet_selection
+            ]
+        else:
+            pipe.controlnet = controlnet_identitynet
+            control_scales = float(identitynet_strength_ratio)
+            control_images = face_kps
+        return control_scales,control_images
 
     # Description
     title = r"""
@@ -592,6 +618,12 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                     choices=STYLE_NAMES,
                     value=DEFAULT_STYLE_NAME,
                 )
+        with gr.Row():       
+            with gr.Column():                
+                enable_CPUOffload = gr.Checkbox(
+                    label="Enable CPU Offload", value=True,
+                    info="Offloading the weights to the CPU and only loading them on the GPU when performing the forward pass can also save memory.",                    
+                )
         with gr.Row():         
             with gr.Column():  
                 # strength
@@ -674,10 +706,12 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                     schedulers = [
                         "DEISMultistepScheduler",
                         "HeunDiscreteScheduler",
+                        "EulerAncestralDiscreteScheduler",
                         "EulerDiscreteScheduler",
                         "DPMSolverMultistepScheduler",
                         "DPMSolverMultistepScheduler-Karras",
                         "DPMSolverMultistepScheduler-Karras-SDE",
+                        "UniPCMultistepScheduler"
                     ]
                     scheduler = gr.Dropdown(
                         label="Schedulers",
@@ -713,6 +747,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
                     seed,
                     scheduler,
                     enable_LCM,
+                    enable_CPUOffload,
                     enhance_face_region,model_input,model_dropdown,width,height,num_images
                 ],
                 outputs=[gallery, usage_tips],
@@ -733,7 +768,7 @@ def main(pretrained_model_name_or_path="wangqixun/YamerMIX_v8", enable_lcm_arg=F
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--pretrained_model_name_or_path", type=str, default="wangqixun/YamerMIX_v8"
+        "--pretrained_model_folder", type=str, default=None
     )
     parser.add_argument(
         "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
@@ -742,4 +777,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    main(args.pretrained_model_name_or_path, args.enable_LCM,args.share)
+    main(args.pretrained_model_folder, args.enable_LCM,args.share)

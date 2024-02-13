@@ -17,12 +17,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import cv2
 import math
-
 import numpy as np
 import PIL.Image
 import torch
 import torch.nn.functional as F
-
+from common.util import clean_memory
 from diffusers.image_processor import PipelineImageInput
 
 from diffusers.models import ControlNetModel
@@ -514,7 +513,8 @@ def draw_kps(image_pil, kps, color_list=[(255,0,0), (0,255,0), (0,0,255), (255,2
 
     out_img_pil = PIL.Image.fromarray(out_img.astype(np.uint8))
     return out_img_pil
-    
+
+ 
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
     def cuda(self, dtype=torch.float16, use_xformers=True):
@@ -598,7 +598,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         for attn_processor in unet.attn_processors.values():
             if isinstance(attn_processor, IPAttnProcessor):
                 attn_processor.scale = scale
-
+   
     def _encode_prompt_image_emb(self, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):
         
         if isinstance(prompt_image_emb, torch.Tensor):
@@ -905,7 +905,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                                          num_images_per_prompt,
                                                          self.unet.dtype,
                                                          self.do_classifier_free_guidance)
-        
+       
         # 4. Prepare image
         if isinstance(controlnet, ControlNetModel):
             image = self.prepare_image(
@@ -1047,7 +1047,17 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         is_unet_compiled = is_compiled_module(self.unet)
         is_controlnet_compiled = is_compiled_module(self.controlnet)
         is_torch_higher_equal_2_1 = is_torch_version(">=", "2.1")
-                
+
+        #offload tokenizers for safe memory in cpu offload
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0:
+            self._all_hooks[0].offload()
+            self._all_hooks[0].remove()
+            self._all_hooks[1].offload()
+            self._all_hooks[1].remove()        
+        else:
+            del self.text_encoder, self.text_encoder_2, self.tokenizer, self.tokenizer_2
+        clean_memory()
+        
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # Relevant thread:
@@ -1086,7 +1096,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 if isinstance(self.controlnet, MultiControlNetModel):
                     down_block_res_samples_list, mid_block_res_sample_list = [], []
                     for control_index in range(len(self.controlnet.nets)):
-                        controlnet = self.controlnet.nets[control_index].to(device)
+                        controlnet = self.controlnet.nets[control_index].to(device)                        
                         if control_index == 0:
                             # assume fhe first controlnet is IdentityNet
                             controlnet_prompt_embeds = prompt_image_emb
@@ -1111,10 +1121,13 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
                         down_block_res_samples_list.append(down_block_res_samples)
                         mid_block_res_sample_list.append(mid_block_res_sample)
+                        del controlnet
+                        clean_memory()
 
                     mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
                     down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
                                               zip(*down_block_res_samples_list)]
+                    
                 else:
                     down_block_res_samples, mid_block_res_sample = self.controlnet(
                         control_model_input,
@@ -1180,23 +1193,35 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
         
+        #offload unet and multicontrolnet to safe memory for vae
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0:
+            self._all_hooks[2].offload()
+            self._all_hooks[2].remove()
+            self._all_hooks[4].offload()
+            self._all_hooks[4].remove()
+        else:
+            del self.unet
+            del self.controlnet        
+        clean_memory()
+        
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16
             needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
             if needs_upcasting:
-                self.upcast_vae()
+                self.upcast_vae()                                                
                 latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
             
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+            #self.vae.to("cpu", non_blocking=True) 
+            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]            
 
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)            
+                
         else:
             image = latents
 
         if not output_type == "latent":
-            # apply watermark if available
             if self.watermark is not None:
                 image = self.watermark.apply_watermark(image)
 
@@ -1204,8 +1229,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
         # Offload all models
         self.maybe_free_model_hooks()
-
+        clean_memory()
         if not return_dict:
             return (image,)
 
         return StableDiffusionXLPipelineOutput(images=image)
+   
+    
