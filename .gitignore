@@ -170,3 +170,4 @@ models/
 .cog
 
 gradio_cached_examples
+.vscode
