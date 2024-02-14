@@ -33,6 +33,8 @@ from common.util import clean_memory
 
 import gradio as gr
 
+torch.backends.cuda.matmul.allow_tf32 = True
+
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
 device = get_torch_device()
@@ -694,7 +696,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     )
                     guidance_threshold = gr.Slider(
                         label="Guidance threshold",
-                        minimum=0.1,
+                        minimum=0.4,
                         maximum=1,
                         step=0.1,
                         value=1,
