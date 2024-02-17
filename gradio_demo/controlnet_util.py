@@ -15,7 +15,7 @@ controlnet_canny = None
 controlnet_depth = None
 controlnet = None
 
-def load_controlnet(pretrained_model_folder, controlnet_selection, device, dtype):
+def load_controlnet(pretrained_model_folder, device, dtype):
     global depth_estimator, feature_extractor, controlnet_pose, controlnet_canny, controlnet_depth
 
     # Load pipeline face ControlNetModel    
@@ -34,18 +34,17 @@ def load_controlnet(pretrained_model_folder, controlnet_selection, device, dtype
         controlnet_identity_model, torch_dtype=dtype
         )
     
-    if "pose" in controlnet_selection:
-        controlnet_pose = ControlNetModel.from_pretrained(
-        controlnet_pose_model, torch_dtype=dtype
-        )
-    if "canny" in controlnet_selection:
-        controlnet_canny = ControlNetModel.from_pretrained(
-            controlnet_canny_model, torch_dtype=dtype
-        )
-    if "depth" in controlnet_selection:
-        controlnet_depth = ControlNetModel.from_pretrained(
-            controlnet_depth_model, torch_dtype=dtype
-        )
+    controlnet_pose = ControlNetModel.from_pretrained(
+    controlnet_pose_model, torch_dtype=dtype
+    )
+
+    controlnet_canny = ControlNetModel.from_pretrained(
+        controlnet_canny_model, torch_dtype=dtype
+    )
+
+    controlnet_depth = ControlNetModel.from_pretrained(
+        controlnet_depth_model, torch_dtype=dtype
+    )
     return openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet_identity
 
 def get_depth_map(image):    
