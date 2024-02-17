@@ -62,6 +62,7 @@ DEFAULT_STYLE_NAME = "Watercolor"
 _pretrained_model_folder = None
 default_model = "wangqixun/YamerMIX_v8"
 last_loaded_model = None
+last_loaded_scheduler = None
 pipe = None
 controlnet = None
 
@@ -78,10 +79,10 @@ face_adapter = f"checkpoints/ip-adapter.bin"
 controlnet = None
 controlnet_map = {}
 
-def load_controlnet_open_pose(pretrained_model_folder, controlnet_selection):
+def load_controlnet_open_pose(pretrained_model_folder):
     global controlnet, controlnet_map, controlnet_map_fn
 
-    openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet = load_controlnet(pretrained_model_folder, controlnet_selection, device, dtype)      
+    openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet = load_controlnet(pretrained_model_folder, device, dtype)      
 
     controlnet_map = {
     "pose": controlnet_pose,
@@ -104,8 +105,11 @@ def get_model_names():
     return model_files
 
 def load_model(pretrained_model_folder, model_name):
-    
+    global pipe
     print(f"Loading model: {model_name}")
+    # Properly discard the old pipe if it exists
+    if hasattr(pipe, 'scheduler'):
+        del pipe.scheduler    
 
     if model_name.endswith(
         ".ckpt"
@@ -165,26 +169,8 @@ def load_model(pretrained_model_folder, model_name):
         )       
     return pipe
 
-def assign_last_params(pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
+def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     global pipe
-    
-    # load and disable LCM
-    lora_model = "latent-consistency/lcm-lora-sdxl" if not pretrained_model_folder else fr"{pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
-    pipe.load_lora_weights(lora_model)             
-
-    if with_LCM:
-        pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
-        pipe.enable_lora()
-    else:
-        pipe.disable_lora()        
-        scheduler_class_name = scheduler.split("-")[0]
-        add_kwargs = {}
-        if len(scheduler.split("-")) > 1:
-            add_kwargs["use_karras_sigmas"] = True
-        if len(scheduler.split("-")) > 2:
-            add_kwargs["algorithm_type"] = "sde-dpmsolver++"
-        scheduler = getattr(diffusers, scheduler_class_name)
-        pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)
     
     pipe.load_ip_adapter_instantid(face_adapter)    
     pipe.set_ip_adapter_scale(adapter_strength_ratio)
@@ -197,7 +183,27 @@ def assign_last_params(pretrained_model_folder, scheduler, adapter_strength_rati
     
     pipe.enable_xformers_memory_efficient_attention()
     pipe.enable_vae_slicing()
-    pipe.enable_vae_tiling()   
+    pipe.enable_vae_tiling() 
+
+def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
+     
+    # load and disable LCM
+    lora_model = "latent-consistency/lcm-lora-sdxl" if not pretrained_model_folder else fr"{pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
+    pipe.load_lora_weights(lora_model)  
+
+    if with_LCM:
+        pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
+        pipe.enable_lora()
+    else:
+        pipe.disable_lora()     
+        scheduler_class_name = scheduler.split("-")[0]
+        add_kwargs = {}
+        if len(scheduler.split("-")) > 1:
+            add_kwargs["use_karras_sigmas"] = True
+        if len(scheduler.split("-")) > 2:
+            add_kwargs["algorithm_type"] = "sde-dpmsolver++"
+        scheduler = getattr(diffusers, scheduler_class_name)
+        pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)  
     
     
 
@@ -206,9 +212,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     global _pretrained_model_folder
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM, controlnet_selection):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
         global pipe  # Declare pipe as a global variable thas_cpu_offloado manage it when the model changes
-        global last_loaded_model
+        global last_loaded_model, last_loaded_scheduler
      
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
@@ -220,35 +226,35 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         if not model_to_load:
             print("No model selected or inputted. Default model will be used.")
             model_to_load = default_model
-        
-        # Proceed with reloading the model if it's different from the last loaded model
-        # if not with_cpu_offload:                
-        #     # Load the new model
-        #     pipe = load_model(_pretrained_model_folder, model_to_load)
-        #     last_loaded_model = model_to_load
-        #     assign_last_params()
-        # else:
+       
         # Load the new model first time
-        choose_device = "cpu" if with_cpu_offload else device
+        choose_device = "cpu" if with_cpu_offload else device.type
         if not pipe or (pipe.device.type != choose_device):
             pipe = None            
             #load controlnet
-            load_controlnet_open_pose(pretrained_model_folder, controlnet_selection)
+            load_controlnet_open_pose(pretrained_model_folder)
             clean_memory()
 
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
-            assign_last_params(_pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM)
+            last_loaded_scheduler = scheduler
+            load_scheduler(pretrained_model_folder, scheduler, with_LCM)
+            assign_last_params(adapter_strength_ratio, with_cpu_offload)
 
-        if (pipe and model_to_load != last_loaded_model):                                  
-            # Properly discard the old pipe if it exists
-            if hasattr(pipe, 'scheduler'):
-               del pipe.scheduler
-            
+        # Reload scheduler if needed
+        if (pipe and model_to_load == last_loaded_model 
+            and scheduler != last_loaded_scheduler):            
+            load_scheduler(pretrained_model_folder, scheduler, with_LCM)
+            last_loaded_scheduler = scheduler
+
+        # Reload model if needed
+        if (pipe and model_to_load != last_loaded_model):                                              
             # Reload model        
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
-            assign_last_params(_pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM)
+            last_loaded_scheduler = scheduler
+            load_scheduler(pretrained_model_folder, scheduler, with_LCM)
+            assign_last_params(adapter_strength_ratio, with_cpu_offload)
       
         print("Model loaded successfully.")
         clean_memory()
@@ -475,7 +481,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM, controlnet_selection)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
