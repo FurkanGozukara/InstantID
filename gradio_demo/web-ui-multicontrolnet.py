@@ -18,7 +18,7 @@ from PIL import Image
 
 import diffusers
 from diffusers.utils import load_image
-from diffusers.models import ControlNetModel
+from diffusers.models import AutoencoderKL
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 
 from huggingface_hub import hf_hub_download
@@ -33,16 +33,37 @@ from common.util import clean_memory
 
 import gradio as gr
 
+parser = argparse.ArgumentParser()
+parser.add_argument(
+"--pretrained_model_folder", type=str, default=None
+)
+parser.add_argument(
+"--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
+)
+parser.add_argument("--fp16", action="store_true", help="fp16")
+parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
+
+args = parser.parse_args()
+
+torch.backends.cuda.matmul.allow_tf32 = True   
+
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
 device = get_torch_device()
-dtype = torch.float16 if str(device).__contains__("cuda") else torch.float32
+
+dtype = torch.bfloat16
+if(args.fp16):
+   dtype = torch.float16
+
+dtype = dtype if str(device).__contains__("cuda") else torch.float32
+
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "Watercolor"
 _pretrained_model_folder = None
 default_model = "wangqixun/YamerMIX_v8"
 last_loaded_model = None
 pipe = None
+controlnet = None
 
 # Load face encoder
 app = FaceAnalysis(
@@ -54,18 +75,13 @@ app.prepare(ctx_id=0, det_size=(640, 640))
 
 # Path to InstantID models
 face_adapter = f"checkpoints/ip-adapter.bin"
-controlnet_path = f"checkpoints/ControlNetModel"
-
-# Load pipeline face ControlNetModel
-controlnet_identitynet = ControlNetModel.from_pretrained(
-    controlnet_path, torch_dtype=dtype
-)
-
+controlnet = None
 controlnet_map = {}
 
-def load_controlnet_open_pose(pretrained_model_folder):
-    global controlnet_map, controlnet_map_fn
-    openpose, controlnet_pose, controlnet_canny, controlnet_depth = load_controlnet(pretrained_model_folder)      
+def load_controlnet_open_pose(pretrained_model_folder, controlnet_selection):
+    global controlnet, controlnet_map, controlnet_map_fn
+
+    openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet = load_controlnet(pretrained_model_folder, controlnet_selection, device, dtype)      
 
     controlnet_map = {
     "pose": controlnet_pose,
@@ -82,18 +98,10 @@ def get_model_names():
     models_dir = 'models'
     if not os.path.exists(models_dir):
         os.makedirs(models_dir)
-    model_files = [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
+    model_files = []
+    model_files.append(default_model)
+    model_files = model_files + [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
     return model_files
-
-def assign_last_params():
-    global pipe
-    pipe.load_ip_adapter_instantid(face_adapter)    
-    pipe.to(device)
-    
-    # apply improvements
-    pipe.enable_vae_slicing()
-    pipe.enable_vae_tiling()    
-    pipe.enable_xformers_memory_efficient_attention()
 
 def load_model(pretrained_model_folder, model_name):
     
@@ -109,6 +117,9 @@ def load_model(pretrained_model_folder, model_name):
         else:
             model_path = model_name
     
+    # vae = AutoencoderKL.from_pretrained(
+    #         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    #     )
     if model_name.endswith(
         ".ckpt"
     ) or model_name.endswith(".safetensors"):        
@@ -139,36 +150,71 @@ def load_model(pretrained_model_folder, model_name):
             tokenizer_2=tokenizers[1],
             unet=unet,
             scheduler=scheduler,
-            controlnet=[controlnet_identitynet],
+            controlnet=[controlnet],
+            torch_dtype=dtype
         )
 
     else:
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
+            #vae = vae,
             model_path,
-            controlnet=[controlnet_identitynet],
+            controlnet=[controlnet],
             torch_dtype=dtype,
             safety_checker=None,
             feature_extractor=None,
         )       
     return pipe
 
+def assign_last_params(pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
+    global pipe
+    
+    # load and disable LCM
+    lora_model = "latent-consistency/lcm-lora-sdxl" if not pretrained_model_folder else fr"{pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
+    pipe.load_lora_weights(lora_model)             
+
+    if with_LCM:
+        pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
+        pipe.enable_lora()
+    else:
+        pipe.disable_lora()        
+        scheduler_class_name = scheduler.split("-")[0]
+        add_kwargs = {}
+        if len(scheduler.split("-")) > 1:
+            add_kwargs["use_karras_sigmas"] = True
+        if len(scheduler.split("-")) > 2:
+            add_kwargs["algorithm_type"] = "sde-dpmsolver++"
+        scheduler = getattr(diffusers, scheduler_class_name)
+        pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)
+    
+    pipe.load_ip_adapter_instantid(face_adapter)    
+    pipe.set_ip_adapter_scale(adapter_strength_ratio)
+    
+    # apply improvements    
+    if with_cpu_offload:            
+        pipe.enable_model_cpu_offload()        
+    else:
+        pipe.to(device)
+    
+    pipe.enable_xformers_memory_efficient_attention()
+    pipe.enable_vae_slicing()
+    pipe.enable_vae_tiling()   
+    
+    
+
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM, controlnet_selection):
         global pipe  # Declare pipe as a global variable thas_cpu_offloado manage it when the model changes
         global last_loaded_model
-
-        #load controlnet
-        load_controlnet_open_pose(pretrained_model_folder)
-            
+     
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
 
         # Determine the model to load
-        model_to_load = model_input if model_input else os.path.join('models', model_dropdown) if model_dropdown else None
+        model_to_load = model_input if model_input else os.path.join('models', model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
 
         # Return early if no model is selected or inputted
         if not model_to_load:
@@ -176,46 +222,34 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             model_to_load = default_model
         
         # Proceed with reloading the model if it's different from the last loaded model
-        if not with_cpu_offload:                
-            # Load the new model
+        # if not with_cpu_offload:                
+        #     # Load the new model
+        #     pipe = load_model(_pretrained_model_folder, model_to_load)
+        #     last_loaded_model = model_to_load
+        #     assign_last_params()
+        # else:
+        # Load the new model first time
+        choose_device = "cpu" if with_cpu_offload else device
+        if not pipe or (pipe.device.type != choose_device):
+            pipe = None            
+            #load controlnet
+            load_controlnet_open_pose(pretrained_model_folder, controlnet_selection)
+            clean_memory()
+
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
-            assign_last_params()
-        else:
-            if (model_to_load != last_loaded_model):                      
-                # Properly discard the old pipe if it exists
-                if hasattr(pipe, 'scheduler'):
-                    del pipe.scheduler
-                
-            # Load the new model
+            assign_last_params(_pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM)
+
+        if (pipe and model_to_load != last_loaded_model):                                  
+            # Properly discard the old pipe if it exists
+            if hasattr(pipe, 'scheduler'):
+               del pipe.scheduler
+            
+            # Reload model        
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
-            assign_last_params()
-
-        if with_cpu_offload:            
-            pipe.enable_model_cpu_offload()        
-
-        # load and disable LCM
-        lora_model = "latent-consistency/lcm-lora-sdxl" if not _pretrained_model_folder else fr"{_pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
-        pipe.load_lora_weights(lora_model)             
-
-        if with_LCM:
-            pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
-            pipe.enable_lora()
-        else:
-            pipe.disable_lora()        
-            scheduler_class_name = scheduler.split("-")[0]
-
-            add_kwargs = {}
-            if len(scheduler.split("-")) > 1:
-                add_kwargs["use_karras_sigmas"] = True
-            if len(scheduler.split("-")) > 2:
-                add_kwargs["algorithm_type"] = "sde-dpmsolver++"
-            scheduler = getattr(diffusers, scheduler_class_name)
-            pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)
-        
-        pipe.set_ip_adapter_scale(adapter_strength_ratio)
-
+            assign_last_params(_pretrained_model_folder, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM)
+      
         print("Model loaded successfully.")
         clean_memory()
 
@@ -380,6 +414,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         width_target,
         height_target,
         num_images,
+        guidance_threshold,
         progress=gr.Progress(track_tqdm=True),
     ):
         global controlnet_map, controlnet_map_fn
@@ -440,10 +475,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM, controlnet_selection)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
-
-        generator = torch.Generator(device=device).manual_seed(seed)
 
         output_dir = "outputs"
         os.makedirs(output_dir, exist_ok=True)
@@ -457,7 +490,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         for i in range(num_images):
             if num_images > 1:
                 seed = random.randint(0, MAX_SEED)
-            generator = torch.Generator(device=device).manual_seed(seed)
+            generator = torch.Generator(device=pipe.device).manual_seed(seed)
            
             iteration_start_time = time.time()
             result_images = pipe(
@@ -470,26 +503,27 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 num_inference_steps=num_steps,
                 guidance_scale=guidance_scale,
                 height=height_target,
-                width=width_target,
+                width=width_target,                
                 generator=generator,
+                end_cfg=guidance_threshold
             ).images
 
-            for img in result_images:
-                current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
-                output_path = f"outputs/{current_time}.png"
-                if not os.path.exists("outputs"):
-                    os.makedirs("outputs")
-                img.save(output_path)
-                images_generated.append(img)
+            image = result_images[0]
+            current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+            output_path = f"outputs/{current_time}.png"
+            if not os.path.exists("outputs"):
+                os.makedirs("outputs")
+            image.save(output_path)
+            images_generated.append(image)
 
             iteration_end_time = time.time()
             iteration_time = iteration_end_time - iteration_start_time
             
             print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")
             
-            if not enable_CPUOffload and i < (num_images - 1):
-                reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
-                control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
+            # if not enable_CPUOffload and i < (num_images - 1):
+            #     reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
+            #     control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
@@ -506,7 +540,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 "depth": depth_strength,
             }
             pipe.controlnet = MultiControlNetModel(
-                [controlnet_identitynet]
+                [controlnet]
                 + [controlnet_map[s] for s in controlnet_selection]
             )
             control_scales = [float(identitynet_strength_ratio)] + [
@@ -517,7 +551,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 for s in controlnet_selection
             ]
         else:
-            pipe.controlnet = controlnet_identitynet
+            pipe.controlnet = controlnet
             control_scales = float(identitynet_strength_ratio)
             control_images = face_kps
         return control_scales,control_images
@@ -671,7 +705,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     )
                 with gr.Row():
                     controlnet_selection = gr.CheckboxGroup(
-                        ["pose", "canny", "depth"], label="Controlnet", value=["pose"],
+                        ["pose", "canny", "depth"], label="Controlnet", value=None,
                         info="Use pose for skeleton inference, canny for edge detection, and depth for depth map estimation. You can try all three to control the generation process"
                     )
             with gr.Column():
@@ -686,11 +720,18 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         value=5 if enable_lcm_arg else 30,
                     )
                     guidance_scale = gr.Slider(
-                        label="Guidance scale",
+                        label="CFG scale",
                         minimum=0.1,
                         maximum=20.0,
                         step=0.1,
                         value=0.0 if enable_lcm_arg else 5.0,
+                    )
+                    guidance_threshold = gr.Slider(
+                        label="CFG threshold",
+                        minimum=0.4,
+                        maximum=1,
+                        step=0.1,
+                        value=1,
                     )
                     seed = gr.Slider(
                         label="Seed",
@@ -748,7 +789,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     scheduler,
                     enable_LCM,
                     enable_CPUOffload,
-                    enhance_face_region,model_input,model_dropdown,width,height,num_images
+                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold
                 ],
                 outputs=[gallery, usage_tips],
             )
@@ -761,20 +802,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             )
 
         gr.Markdown(article)
-
     demo.launch(inbrowser=True, share=share)
 
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--pretrained_model_folder", type=str, default=None
-    )
-    parser.add_argument(
-        "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
-    )
-    parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
-
-    args = parser.parse_args()
-
     main(args.pretrained_model_folder, args.enable_LCM,args.share)

@@ -165,9 +165,11 @@ cython_debug/
 huggingface/
 checkpoints/
 models/
-
+diffusers/
+temp.png
 # Cog
 .cog
 
 gradio_cached_examples
 .vscode
+docs

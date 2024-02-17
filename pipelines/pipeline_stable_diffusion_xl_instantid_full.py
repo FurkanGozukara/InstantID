@@ -413,7 +413,7 @@ class LongPromptWeight(object):
             neg_prompt_tokens_2.copy(), neg_prompt_weights_2.copy()
         )
 
-        dtype = torch.float32 if pipe.device.type == 'cpu'else torch.float16
+        dtype = torch.float32 if pipe.device.type == 'cpu'else pipe.dtype
         # get prompt embeddings one by one is not working.
         for i in range(len(prompt_token_groups)):
             # get positive prompt embeddings with weights
@@ -513,7 +513,19 @@ def draw_kps(image_pil, kps, color_list=[(255,0,0), (0,255,0), (0,0,255), (255,2
 
     out_img_pil = PIL.Image.fromarray(out_img.astype(np.uint8))
     return out_img_pil
-
+# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
+def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
+    """
+    Rescale `noise_cfg` according to `guidance_rescale`. Based on findings of [Common Diffusion Noise Schedules and
+    Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf). See Section 3.4
+    """
+    std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
+    std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
+    # rescale the results from guidance (fixes overexposure)
+    noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
+    # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
+    noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+    return noise_cfg
  
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
@@ -567,6 +579,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     def set_ip_adapter(self, model_ckpt, num_tokens, scale):
         
         unet = self.unet
+        dtype = torch.float32 if self.device.type == "cpu" else self.dtype
         attn_procs = {}
         for name in unet.attn_processors.keys():
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
@@ -579,16 +592,16 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 block_id = int(name[len("down_blocks.")])
                 hidden_size = unet.config.block_out_channels[block_id]
             if cross_attention_dim is None:
-                attn_procs[name] = AttnProcessor().to(unet.device, dtype=unet.dtype)
+                attn_procs[name] = AttnProcessor().to(unet.device, dtype=dtype)
             else:
                 attn_procs[name] = IPAttnProcessor(hidden_size=hidden_size, 
                                                    cross_attention_dim=cross_attention_dim, 
                                                    scale=scale,
-                                                   num_tokens=num_tokens).to(unet.device, dtype=unet.dtype)
+                                                   num_tokens=num_tokens).to(unet.device, dtype=dtype)
         unet.set_attn_processor(attn_procs)
         
         state_dict = torch.load(model_ckpt, map_location="cpu")
-        ip_layers = torch.nn.ModuleList(self.unet.attn_processors.values())
+        ip_layers = torch.nn.ModuleList(self.unet.attn_processors.values()).to(self.device, dtype=dtype)
         if 'ip_adapter' in state_dict:
             state_dict = state_dict['ip_adapter']
         ip_layers.load_state_dict(state_dict)
@@ -624,7 +637,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
         
         return prompt_image_emb.to(device=device, dtype=dtype)
-
+     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+    
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -663,7 +677,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         clip_skip: Optional[int] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-
+        end_cfg: Optional[float] = None,
+        guidance_rescale: float = 0.7,
         # IP adapter
         ip_adapter_scale=None,
 
@@ -822,9 +837,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 "1.0.0",
                 "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
             )
-
+       
+        device = self._execution_device
         controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
-
+       
         # align format for control guidance
         if not isinstance(control_guidance_start, list) and isinstance(control_guidance_end, list):
             control_guidance_start = len(control_guidance_end) * [control_guidance_start]
@@ -871,7 +887,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
 
-        device = self._execution_device
+       
 
         if isinstance(controlnet, MultiControlNetModel) and isinstance(controlnet_conditioning_scale, float):
             controlnet_conditioning_scale = [controlnet_conditioning_scale] * len(controlnet.nets)
@@ -882,6 +898,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             else controlnet.nets[0].config.global_pool_conditions
         )
         guess_mode = guess_mode or global_pool_conditions
+        
+        do_classifier_free_guidance  = self._guidance_scale > 1 and self.unet.config.time_cond_proj_dim is None
 
         # 3.1 Encode input prompt
         (
@@ -904,7 +922,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                                          device,
                                                          num_images_per_prompt,
                                                          self.unet.dtype,
-                                                         self.do_classifier_free_guidance)
+                                                         do_classifier_free_guidance)
        
         # 4. Prepare image
         if isinstance(controlnet, ControlNetModel):
@@ -916,7 +934,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 num_images_per_prompt=num_images_per_prompt,
                 device=device,
                 dtype=controlnet.dtype,
-                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                do_classifier_free_guidance=do_classifier_free_guidance,
                 guess_mode=guess_mode,
             )
             height, width = image.shape[-2:]
@@ -932,7 +950,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     num_images_per_prompt=num_images_per_prompt,
                     device=device,
                     dtype=controlnet.dtype,
-                    do_classifier_free_guidance=self.do_classifier_free_guidance,
+                    do_classifier_free_guidance=do_classifier_free_guidance,
                     guess_mode=guess_mode,
                 )
 
@@ -1032,7 +1050,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             negative_add_time_ids = add_time_ids
 
-        if self.do_classifier_free_guidance:
+        if do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
             add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
@@ -1049,13 +1067,13 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         is_torch_higher_equal_2_1 = is_torch_version(">=", "2.1")
 
         #offload tokenizers for safe memory in cpu offload
-        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0:
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and self.device.type=='cpu':
             self._all_hooks[0].offload()
             self._all_hooks[0].remove()
             self._all_hooks[1].offload()
             self._all_hooks[1].remove()        
-        else:
-            del self.text_encoder, self.text_encoder_2, self.tokenizer, self.tokenizer_2
+        # else:
+        #     del self.text_encoder, self.text_encoder_2, self.tokenizer, self.tokenizer_2
         clean_memory()
         
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -1064,14 +1082,19 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
                 if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
                     torch._inductor.cudagraph_mark_step_begin()
+
+                # end_cfg is the fraction of the total number of inference steps at which we stop using classifier free guidance
+                if end_cfg is not None and i / num_inference_steps > end_cfg and do_classifier_free_guidance:
+                    do_classifier_free_guidance = False            
+
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
 
                 # controlnet(s) inference
-                if guess_mode and self.do_classifier_free_guidance:
+                if guess_mode and do_classifier_free_guidance:
                     # Infer ControlNet only for the conditional batch.
                     control_model_input = latents
                     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
@@ -1129,6 +1152,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                               zip(*down_block_res_samples_list)]
                     
                 else:
+                    self.controlnet.to(device)
                     down_block_res_samples, mid_block_res_sample = self.controlnet(
                         control_model_input,
                         t,
@@ -1148,7 +1172,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         ]
                         mid_block_res_sample *= control_mask_wight_image_list[-1]
 
-                if guess_mode and self.do_classifier_free_guidance:
+                if guess_mode and do_classifier_free_guidance:
                     # Infered ControlNet only for the conditional batch.
                     # To apply the output of ControlNet to both the unconditional and conditional batches,
                     # add 0 to the unconditional batch to keep it unchanged.
@@ -1169,9 +1193,13 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 )[0]
 
                 # perform guidance
-                if self.do_classifier_free_guidance:
+                if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                if do_classifier_free_guidance and guidance_rescale > 0.0:
+                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
@@ -1194,14 +1222,14 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         callback(step_idx, t, latents)
         
         #offload unet and multicontrolnet to safe memory for vae
-        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0:
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and self.device.type=='cpu':
             self._all_hooks[2].offload()
             self._all_hooks[2].remove()
             self._all_hooks[4].offload()
             self._all_hooks[4].remove()
-        else:
-            del self.unet
-            del self.controlnet        
+        # else:
+        #     del self.unet
+        #     del self.controlnet        
         clean_memory()
         
         if not output_type == "latent":
@@ -1228,7 +1256,9 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
-        self.maybe_free_model_hooks()
+        if self.device.type == 'cpu':
+            self.maybe_free_model_hooks()
+
         clean_memory()
         if not return_dict:
             return (image,)
