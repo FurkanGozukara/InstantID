@@ -40,6 +40,7 @@ parser.add_argument(
 parser.add_argument(
 "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
 )
+parser.add_argument("--lowvram", action="store_true", help="Enable CPU offload for model operations.")
 parser.add_argument("--fp16", action="store_true", help="fp16")
 parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
 
@@ -56,7 +57,7 @@ if(args.fp16):
    dtype = torch.float16
 
 dtype = dtype if str(device).__contains__("cuda") else torch.float32
-
+ENABLE_CPU_OFFLOAD = True if args.lowvram else False
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "Watercolor"
 _pretrained_model_folder = None
@@ -212,7 +213,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     global _pretrained_model_folder
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_cpu_offload, with_LCM):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM):
         global pipe  # Declare pipe as a global variable thas_cpu_offloado manage it when the model changes
         global last_loaded_model, last_loaded_scheduler
      
@@ -228,8 +229,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             model_to_load = default_model
        
         # Load the new model first time
-        choose_device = "cpu" if with_cpu_offload else device.type
-        if not pipe or (pipe.device.type != choose_device):
+        #choose_device = "cpu" if ENABLE_CPU_OFFLOAD else device.type
+        if not pipe: # or (pipe.device.type != choose_device):
             pipe = None            
             #load controlnet
             load_controlnet_open_pose(pretrained_model_folder)
@@ -239,14 +240,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
-            assign_last_params(adapter_strength_ratio, with_cpu_offload)
+            assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
 
         # Reload scheduler if needed
         if (pipe and model_to_load == last_loaded_model 
             and scheduler != last_loaded_scheduler):            
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_loaded_scheduler = scheduler
-
+       
         # Reload model if needed
         if (pipe and model_to_load != last_loaded_model):                                              
             # Reload model        
@@ -254,7 +255,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
-            assign_last_params(adapter_strength_ratio, with_cpu_offload)
+            assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
       
         print("Model loaded successfully.")
         clean_memory()
@@ -412,8 +413,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         guidance_scale,
         seed,
         scheduler,
-        enable_LCM,
-        enable_CPUOffload,
+        enable_LCM,        
         enhance_face_region,
         model_input,
         model_dropdown,
@@ -481,7 +481,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
@@ -496,8 +496,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         for i in range(num_images):
             if num_images > 1:
                 seed = random.randint(0, MAX_SEED)
+            
             generator = torch.Generator(device=pipe.device).manual_seed(seed)
-           
+            
             iteration_start_time = time.time()
             result_images = pipe(
                 prompt=prompt,
@@ -525,12 +526,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             iteration_end_time = time.time()
             iteration_time = iteration_end_time - iteration_start_time
             
-            print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")
+            print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
             
-            # if not enable_CPUOffload and i < (num_images - 1):
-            #     reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_CPUOffload, enable_LCM)        
-            #     control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
-
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
         clean_memory()
@@ -657,13 +654,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     label="Style template",
                     choices=STYLE_NAMES,
                     value=DEFAULT_STYLE_NAME,
-                )
-        with gr.Row():       
-            with gr.Column():                
-                enable_CPUOffload = gr.Checkbox(
-                    label="Enable CPU Offload", value=True,
-                    info="Offloading the weights to the CPU and only loading them on the GPU when performing the forward pass can also save memory.",                    
-                )
+                )       
         with gr.Row():         
             with gr.Column():  
                 # strength
@@ -793,8 +784,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     guidance_scale,
                     seed,
                     scheduler,
-                    enable_LCM,
-                    enable_CPUOffload,
+                    enable_LCM,                    
                     enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold
                 ],
                 outputs=[gallery, usage_tips],
@@ -811,4 +801,4 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     demo.launch(inbrowser=True, share=share)
 
 if __name__ == "__main__":
-    main(args.pretrained_model_folder, args.enable_LCM,args.share)
+    main(args.pretrained_model_folder,args.enable_LCM,args.share)

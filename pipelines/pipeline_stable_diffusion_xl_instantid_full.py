@@ -961,7 +961,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             assert False
 
-        # 4.1 Region control
+        # 4.1 Region control        
         if control_mask is not None:
             mask_weight_image = control_mask
             mask_weight_image = np.array(mask_weight_image)
@@ -1072,8 +1072,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             self._all_hooks[0].remove()
             self._all_hooks[1].offload()
             self._all_hooks[1].remove()        
-        # else:
-        #     del self.text_encoder, self.text_encoder_2, self.tokenizer, self.tokenizer_2
+        
         clean_memory()
         
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -1227,9 +1226,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             self._all_hooks[2].remove()
             self._all_hooks[4].offload()
             self._all_hooks[4].remove()
-        # else:
-        #     del self.unet
-        #     del self.controlnet        
+      
         clean_memory()
         
         if not output_type == "latent":
