@@ -39,8 +39,8 @@ folders_and_files = {
         "https://huggingface.co/InstantX/InstantID/resolve/main/ip-adapter.bin"
     ],
 	os.path.join("checkpoints","ControlNetModel"): [
-        "https://huggingface.co/LiheYoung/depth_anything_vitl14/resolve/main/pytorch_model.bin",
-		"https://huggingface.co/LiheYoung/depth_anything_vitl14/resolve/main/config.json",
+        "https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/diffusion_pytorch_model.safetensors",
+		"https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/config.json",
     ],
 	os.path.join("models","antelopev2"): [
         "https://huggingface.co/MonsterMMORPG/tools/resolve/main/1k3d68.onnx",
