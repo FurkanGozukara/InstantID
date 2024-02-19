@@ -10,10 +10,9 @@ def create_directory(path):
     else:
         print(f"Directory already exists: {path}")
 
-def download_file(url, folder_path):
-    print(f"{url}")
-    """Download a file from a given URL to a specified folder."""
-    local_filename = url.split('/')[-1]
+def download_file(url, folder_path, file_name=None):
+    """Download a file from a given URL to a specified folder with an optional file name."""
+    local_filename = file_name if file_name else url.split('/')[-1]
     local_filepath = os.path.join(folder_path, local_filename)
 
     # Stream download to handle large files
@@ -33,26 +32,26 @@ def download_file(url, folder_path):
     else:
         print(f"Downloaded {local_filename} to {folder_path}")
 
-# Define the folders and their corresponding file URLs
+# Define the folders and their corresponding file URLs with optional file names
 folders_and_files = {
     os.path.join("checkpoints"): [
-        "https://huggingface.co/InstantX/InstantID/resolve/main/ip-adapter.bin"
+        ("https://huggingface.co/InstantX/InstantID/resolve/main/ip-adapter.bin", None)
     ],
-	os.path.join("checkpoints","ControlNetModel"): [
-        "https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/diffusion_pytorch_model.safetensors",
-		"https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/config.json",
+    os.path.join("checkpoints", "ControlNetModel"): [
+        ("https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/diffusion_pytorch_model.safetensors", None),
+        ("https://huggingface.co/InstantX/InstantID/resolve/main/ControlNetModel/config.json", "config.json"),
     ],
-	os.path.join("models","antelopev2"): [
-        "https://huggingface.co/MonsterMMORPG/tools/resolve/main/1k3d68.onnx",
-		"https://huggingface.co/MonsterMMORPG/tools/resolve/main/2d106det.onnx",
-		"https://huggingface.co/MonsterMMORPG/tools/resolve/main/genderage.onnx",
-		"https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx",
-		"https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx"
+    os.path.join("models", "antelopev2"): [
+        ("https://huggingface.co/MonsterMMORPG/tools/resolve/main/1k3d68.onnx", None),
+        ("https://huggingface.co/MonsterMMORPG/tools/resolve/main/2d106det.onnx", None),
+        ("https://huggingface.co/MonsterMMORPG/tools/resolve/main/genderage.onnx", None),
+        ("https://huggingface.co/MonsterMMORPG/tools/resolve/main/glintr100.onnx", None),
+        ("https://huggingface.co/MonsterMMORPG/tools/resolve/main/scrfd_10g_bnkps.onnx", None)
     ]
 }
 
 # Perform the download process
 for folder, files in folders_and_files.items():
     create_directory(folder)
-    for file_url in files:
-        download_file(file_url, folder)
+    for file_url, file_name in files:
+        download_file(file_url, folder, file_name)
