@@ -18,7 +18,6 @@ from PIL import Image
 
 import diffusers
 from diffusers.utils import load_image
-from diffusers.models import AutoencoderKL
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 
 from huggingface_hub import hf_hub_download
@@ -28,7 +27,7 @@ from insightface.app import FaceAnalysis
 from style_template import styles
 from pipelines.pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
 from model_util import load_models_xl, get_torch_device
-from controlnet_util import load_controlnet, get_depth_map, get_canny_image
+from controlnet_util import load_controlnet, load_depth_estimator as load_depth, get_depth_map, get_depth_anything_map, get_canny_image
 from common.util import clean_memory
 
 import gradio as gr
@@ -60,10 +59,13 @@ dtype = dtype if str(device).__contains__("cuda") else torch.float32
 ENABLE_CPU_OFFLOAD = True if args.lowvram else False
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "Watercolor"
+DEPTH_ESTIMATOR = ["LiheYoung/depth_anything", "Intel/dpt-hybrid-midas"]
 _pretrained_model_folder = None
 default_model = "wangqixun/YamerMIX_v8"
 last_loaded_model = None
 last_loaded_scheduler = None
+last_loaded_depth_estimator = None
+
 pipe = None
 controlnet = None
 
@@ -83,7 +85,7 @@ controlnet_map = {}
 def load_controlnet_open_pose(pretrained_model_folder):
     global controlnet, controlnet_map, controlnet_map_fn
 
-    openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet = load_controlnet(pretrained_model_folder, device, dtype)      
+    openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet = load_controlnet(pretrained_model_folder, dtype)      
 
     controlnet_map = {
     "pose": controlnet_pose,
@@ -95,6 +97,12 @@ def load_controlnet_open_pose(pretrained_model_folder):
     "canny": get_canny_image,
     "depth": get_depth_map,
 }
+def load_depth_estimator(pretrained_model_folder,depth_type):
+    load_depth(pretrained_model_folder, device,depth_type)
+    if(depth_type == "LiheYoung/depth_anything"):
+        controlnet_map_fn["depth"]=get_depth_anything_map
+    else:
+        controlnet_map_fn["depth"]=get_depth_map
 
 def get_model_names():
     models_dir = 'models'
@@ -106,7 +114,7 @@ def get_model_names():
     return model_files
 
 def load_model(pretrained_model_folder, model_name):
-    global pipe
+    global pipe    
     print(f"Loading model: {model_name}")
     # Properly discard the old pipe if it exists
     if hasattr(pipe, 'scheduler'):
@@ -115,19 +123,7 @@ def load_model(pretrained_model_folder, model_name):
     if model_name.endswith(
         ".ckpt"
     ) or model_name.endswith(".safetensors"):
-        model_path = model_name
-    else:    
-        if pretrained_model_folder:
-            model_path = fr"{pretrained_model_folder}/{model_name}"
-        else:
-            model_path = model_name
-    
-    # vae = AutoencoderKL.from_pretrained(
-    #         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
-    #     )
-    if model_name.endswith(
-        ".ckpt"
-    ) or model_name.endswith(".safetensors"):        
+        model_path = model_name      
         scheduler_kwargs = hf_hub_download(
             repo_id="wangqixun/YamerMIX_v8",
             subfolder="scheduler",
@@ -139,15 +135,13 @@ def load_model(pretrained_model_folder, model_name):
             local_dir=fr"{pretrained_model_folder}/wangqixun/YamerMIX_v8",
             local_dir_use_symlinks=False
         )
-
         (tokenizers, text_encoders, unet, _, vae) = load_models_xl(
-            pretrained_model_name_or_path=model_path,
-            scheduler_name=None,
-            weight_dtype=dtype,
+        pretrained_model_name_or_path=model_path,
+        scheduler_name=None,
+        weight_dtype=dtype,
         )
-
         scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
-        pipe = StableDiffusionXLInstantIDPipeline(
+        pipe = StableDiffusionXLInstantIDPipeline(            
             vae=vae,
             text_encoder=text_encoders[0],
             text_encoder_2=text_encoders[1],
@@ -155,13 +149,15 @@ def load_model(pretrained_model_folder, model_name):
             tokenizer_2=tokenizers[1],
             unet=unet,
             scheduler=scheduler,
-            controlnet=[controlnet],
-            torch_dtype=dtype
+            controlnet=[controlnet],           
         )
-
-    else:
-        pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
-            #vae = vae,
+    else:    
+        if pretrained_model_folder:
+            model_path = fr"{pretrained_model_folder}/{model_name}"
+        else:
+            model_path = model_name
+  
+        pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
             model_path,
             controlnet=[controlnet],
             torch_dtype=dtype,
@@ -173,11 +169,10 @@ def load_model(pretrained_model_folder, model_name):
 def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     global pipe
     
-    pipe.load_ip_adapter_instantid(face_adapter)    
-    pipe.set_ip_adapter_scale(adapter_strength_ratio)
+    set_ip_adapter(adapter_strength_ratio)
     
     # apply improvements    
-    if with_cpu_offload:            
+    if with_cpu_offload:                 
         pipe.enable_model_cpu_offload()        
     else:
         pipe.to(device)
@@ -185,6 +180,11 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     pipe.enable_xformers_memory_efficient_attention()
     pipe.enable_vae_slicing()
     pipe.enable_vae_tiling() 
+
+def set_ip_adapter(adapter_strength_ratio):    
+    pipe.load_ip_adapter_instantid(face_adapter)    
+    pipe.set_ip_adapter_scale(adapter_strength_ratio)
+    
 
 def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
      
@@ -213,9 +213,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     global _pretrained_model_folder
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM):
-        global pipe  # Declare pipe as a global variable thas_cpu_offloado manage it when the model changes
-        global last_loaded_model, last_loaded_scheduler
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type):
+        global pipe  # Declare pipe as a global variable thas_cpu_offload manage it when the model changes
+        global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator
      
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
@@ -228,19 +228,33 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             print("No model selected or inputted. Default model will be used.")
             model_to_load = default_model
        
-        # Load the new model first time
-        #choose_device = "cpu" if ENABLE_CPU_OFFLOAD else device.type
-        if not pipe: # or (pipe.device.type != choose_device):
+        # Reload CPU offload to fix bug for half mode
+        if pipe and ENABLE_CPU_OFFLOAD:
+            pipe.disable_xformers_memory_efficient_attention()
+            set_ip_adapter(adapter_strength_ratio)            
+            from pipelines.pipeline_common import optionally_disable_offloading
+            optionally_disable_offloading(pipe)
+            pipe.enable_model_cpu_offload()
+            pipe.enable_xformers_memory_efficient_attention()
+
+        if not pipe:
             pipe = None            
             #load controlnet
             load_controlnet_open_pose(pretrained_model_folder)
+            load_depth_estimator(pretrained_model_folder, depth_type)
             clean_memory()
 
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
+            last_loaded_depth_estimator = depth_type
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
+
+        # Reload depth estimator if neeed
+        if (pipe and model_to_load == last_loaded_model
+            and depth_type != last_loaded_depth_estimator):          
+            load_depth_estimator(pretrained_model_folder, depth_type)  
 
         # Reload scheduler if needed
         if (pipe and model_to_load == last_loaded_model 
@@ -254,9 +268,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
+            last_loaded_depth_estimator = depth_type
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
-      
+        
         print("Model loaded successfully.")
         clean_memory()
 
@@ -421,6 +436,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         height_target,
         num_images,
         guidance_threshold,
+        depth_type,
         progress=gr.Progress(track_tqdm=True),
     ):
         global controlnet_map, controlnet_map_fn
@@ -481,7 +497,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
@@ -649,12 +665,19 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     label="Enable Fast Inference with LCM", value=enable_lcm_arg,
                     info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
                 )
+        with gr.Row():       
+            with gr.Column():       
+                depth_type = gr.Dropdown(
+                label="Depth Estimator",
+                choices=DEPTH_ESTIMATOR,
+                value="LiheYoung/depth_anything")
+
             with gr.Column():       
                 style = gr.Dropdown(
                     label="Style template",
                     choices=STYLE_NAMES,
                     value=DEFAULT_STYLE_NAME,
-                )       
+                )           
         with gr.Row():         
             with gr.Column():  
                 # strength
@@ -785,7 +808,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     seed,
                     scheduler,
                     enable_LCM,                    
-                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold
+                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type
                 ],
                 outputs=[gallery, usage_tips],
             )
