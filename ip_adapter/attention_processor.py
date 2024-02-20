@@ -332,6 +332,7 @@ class IPAttnProcessor2_0(torch.nn.Module):
         self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
 
+    @torch.cuda.amp.autocast(dtype=torch.float32)
     def forward(
         self,
         attn,
