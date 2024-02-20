@@ -163,6 +163,10 @@ def load_model(pretrained_model_folder, model_name):
             feature_extractor=None,
         )       
     return pipe
+	
+def refresh_model_names():
+    model_names = get_model_names()
+    return gr.update(choices=model_names)	
 
 def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     global pipe
@@ -646,9 +650,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 model_names = get_model_names()
                 with gr.Row():
                     with gr.Column():
-                        model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
+                        refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
                     with gr.Column():
-                        model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")
+                        model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
+                with gr.Row():
+                    with gr.Column():
+                        model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
                 with gr.Row():
                     with gr.Column():
                         width = gr.Number(label="Width", value=1280, visible=True)
@@ -777,7 +784,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         choices=schedulers,
                         value="EulerDiscreteScheduler",
                     )
-
+            refresh_models.click(
+                fn=refresh_model_names,
+                outputs=model_dropdown
+            )
             submit.click(
                 fn=remove_tips,
                 outputs=usage_tips,
