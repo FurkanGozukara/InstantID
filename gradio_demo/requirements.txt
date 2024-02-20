@@ -15,3 +15,5 @@ controlnet_aux
 gdown
 peft
 mediapipe
+mtcnn
+tensorflow
