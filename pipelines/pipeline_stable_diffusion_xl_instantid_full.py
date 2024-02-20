@@ -1253,8 +1253,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
-        #if self.device.type == 'cpu':
-        #    self.maybe_free_model_hooks()
+        if self.device.type == 'cpu':
+            self.maybe_free_model_hooks()
 
         clean_memory()
         if not return_dict:
