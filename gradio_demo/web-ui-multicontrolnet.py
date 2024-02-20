@@ -33,8 +33,13 @@ from common.util import clean_memory
 import gradio as gr
 
 parser = argparse.ArgumentParser()
+
+
 parser.add_argument(
 "--pretrained_model_folder", type=str, default=None
+)
+parser.add_argument(
+"--models_path", type=str, default=None
 )
 parser.add_argument(
 "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
@@ -106,6 +111,9 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
 
 def get_model_names():
     models_dir = 'models'
+    if args.models_path:
+        if os.path.exists:
+            models_dir=args.models_path
     if not os.path.exists(models_dir):
         os.makedirs(models_dir)
     model_files = []
