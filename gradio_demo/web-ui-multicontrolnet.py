@@ -117,9 +117,7 @@ def load_model(pretrained_model_folder, model_name):
     global pipe    
     print(f"Loading model: {model_name}")
     # Properly discard the old pipe if it exists
-    if hasattr(pipe, 'scheduler'):
-        del pipe.scheduler    
-
+ 
     if model_name.endswith(
         ".ckpt"
     ) or model_name.endswith(".safetensors"):
