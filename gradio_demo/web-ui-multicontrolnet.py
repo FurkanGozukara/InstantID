@@ -114,6 +114,7 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
 used_model_path='models'
 
 def get_model_names():
+    global used_model_path
     if args.models_path:
         if os.path.exists:
             used_model_path=args.models_path
@@ -224,6 +225,7 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
+    global used_model_path
     _pretrained_model_folder = pretrained_model_folder
    
     def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type):
