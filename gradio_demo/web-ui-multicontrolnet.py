@@ -109,16 +109,19 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
     else:
         controlnet_map_fn["depth"]=get_depth_map
 
+
+
+used_model_path='models'
+
 def get_model_names():
-    models_dir = 'models'
     if args.models_path:
         if os.path.exists:
-            models_dir=args.models_path
-    if not os.path.exists(models_dir):
-        os.makedirs(models_dir)
+            used_model_path=args.models_path
+    if not os.path.exists(used_model_path):
+        os.makedirs(used_model_path)
     model_files = []
     model_files.append(default_model)
-    model_files = model_files + [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
+    model_files = model_files + [f for f in os.listdir(used_model_path) if f.endswith('.safetensors')]
     return model_files
 
 def load_model(pretrained_model_folder, model_name):
@@ -231,7 +234,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         model_input = model_input.strip() if model_input else None
 
         # Determine the model to load
-        model_to_load = model_input if model_input else os.path.join('models', model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
+        model_to_load = model_input if model_input else os.path.join(used_model_path, model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
 
         # Return early if no model is selected or inputted
         if not model_to_load:
