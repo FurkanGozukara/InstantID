@@ -12,7 +12,7 @@ import torch
 import random
 import numpy as np
 import argparse
-from retinaface import RetinaFace
+
 import PIL
 from PIL import Image
 
@@ -365,10 +365,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         return out_img_pil
 
 
-    def resize_img(input_image, size=None, max_side=1280, min_side=1024, 
-                        pad_to_max_side=False, mode=Image.BILINEAR, base_pixel_number=64):
+    def resize_img(input_image, size=None, max_side=1280, min_side=1024,
+                   pad_to_max_side=False, mode=Image.BILINEAR, base_pixel_number=64):
         w, h = input_image.size
-        
 
         # Create the temp_faces folder if it does not exist
         if not os.path.exists('temp_faces'):
@@ -378,11 +377,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         target_aspect_ratio = size[0] / size[1] if size else max_side / min_side
 
-        # Detect faces in the image
-        faces = RetinaFace.detect_faces(np.array(input_image))
-        if faces and 'face_1' in faces:
-            face = faces['face_1']
-            x, y, x2, y2 = face['facial_area']
+        # Detect faces in the image using FaceAnalysis
+        face_image_cv2 = convert_from_image_to_cv2(input_image)
+        faces = app.get(face_image_cv2)
+        if faces:
+            face = faces[0]  # Assuming the first face is the primary face
+            x, y, x2, y2 = face['bbox']
             face_left = x
             face_top = y
             face_right = x2
@@ -444,6 +444,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             input_image = Image.fromarray(res)
 
         return input_image
+
+    def convert_from_image_to_cv2(img: Image) -> np.ndarray:
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
     def apply_style(
         style_name: str, positive: str, negative: str = ""

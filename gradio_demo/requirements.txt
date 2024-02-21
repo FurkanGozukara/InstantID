@@ -15,4 +15,3 @@ controlnet_aux
 gdown
 peft
 mediapipe
-retina-face
