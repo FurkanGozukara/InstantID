@@ -12,7 +12,7 @@ import torch
 import random
 import numpy as np
 import argparse
-from mtcnn import MTCNN
+from retinaface import RetinaFace
 import PIL
 from PIL import Image
 
@@ -364,10 +364,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         out_img_pil = Image.fromarray(out_img.astype(np.uint8))
         return out_img_pil
 
+
     def resize_img(input_image, size=None, max_side=1280, min_side=1024, 
                         pad_to_max_side=False, mode=Image.BILINEAR, base_pixel_number=64):
         w, h = input_image.size
-        detector = MTCNN()
+        
 
         # Create the temp_faces folder if it does not exist
         if not os.path.exists('temp_faces'):
@@ -378,13 +379,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         target_aspect_ratio = size[0] / size[1] if size else max_side / min_side
 
         # Detect faces in the image
-        faces = detector.detect_faces(np.array(input_image))
-        if faces:
-            # If faces are detected, find the bounding box that encompasses all faces
-            face_left = min(face['box'][0] for face in faces)
-            face_top = min(face['box'][1] for face in faces)
-            face_right = max(face['box'][0] + face['box'][2] for face in faces)
-            face_bottom = max(face['box'][1] + face['box'][3] for face in faces)
+        faces = RetinaFace.detect_faces(np.array(input_image))
+        if faces and 'face_1' in faces:
+            face = faces['face_1']
+            x, y, x2, y2 = face['facial_area']
+            face_left = x
+            face_top = y
+            face_right = x2
+            face_bottom = y2
 
             # Expand the bounding box to include some margin
             margin = 0.2 * max(face_right - face_left, face_bottom - face_top)

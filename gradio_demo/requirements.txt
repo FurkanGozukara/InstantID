@@ -15,5 +15,4 @@ controlnet_aux
 gdown
 peft
 mediapipe
-mtcnn
-tensorflow
+retina-face
