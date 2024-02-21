@@ -29,6 +29,7 @@ venv
 models
 .vs/
 outputs
+temp_faces
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

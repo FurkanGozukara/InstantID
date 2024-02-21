@@ -12,7 +12,7 @@ import torch
 import random
 import numpy as np
 import argparse
-
+from mtcnn import MTCNN
 import PIL
 from PIL import Image
 
@@ -33,8 +33,13 @@ from common.util import clean_memory
 import gradio as gr
 
 parser = argparse.ArgumentParser()
+
+
 parser.add_argument(
 "--pretrained_model_folder", type=str, default=None
+)
+parser.add_argument(
+"--models_path", type=str, default=None
 )
 parser.add_argument(
 "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
@@ -104,13 +109,20 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
     else:
         controlnet_map_fn["depth"]=get_depth_map
 
+
+
+used_model_path='models'
+
 def get_model_names():
-    models_dir = 'models'
-    if not os.path.exists(models_dir):
-        os.makedirs(models_dir)
+    global used_model_path
+    if args.models_path:
+        if os.path.exists:
+            used_model_path=args.models_path
+    if not os.path.exists(used_model_path):
+        os.makedirs(used_model_path)
     model_files = []
     model_files.append(default_model)
-    model_files = model_files + [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
+    model_files = model_files + [f for f in os.listdir(used_model_path) if f.endswith('.safetensors')]
     return model_files
 
 def load_model(pretrained_model_folder, model_name):
@@ -163,6 +175,10 @@ def load_model(pretrained_model_folder, model_name):
             feature_extractor=None,
         )       
     return pipe
+	
+def refresh_model_names():
+    model_names = get_model_names()
+    return gr.update(choices=model_names)	
 
 def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     global pipe
@@ -209,6 +225,7 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
+    global used_model_path
     _pretrained_model_folder = pretrained_model_folder
    
     def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type):
@@ -219,7 +236,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         model_input = model_input.strip() if model_input else None
 
         # Determine the model to load
-        model_to_load = model_input if model_input else os.path.join('models', model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
+        model_to_load = model_input if model_input else os.path.join(used_model_path, model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
 
         # Return early if no model is selected or inputted
         if not model_to_load:
@@ -348,52 +365,71 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         return out_img_pil
 
     def resize_img(input_image, size=None, max_side=1280, min_side=1024, 
-                        pad_to_max_side=False, mode=PIL.Image.BILINEAR, base_pixel_number=64):
+                        pad_to_max_side=False, mode=Image.BILINEAR, base_pixel_number=64):
         w, h = input_image.size
-    
-        if size is not None:
-            #print("size is not none")
-            target_width, target_height = size
-            target_aspect_ratio = target_width / target_height
-            image_aspect_ratio = w / h
+        detector = MTCNN()
 
-            if image_aspect_ratio > target_aspect_ratio:
-                # Image is wider than desired aspect ratio
-                new_width = int(h * target_aspect_ratio)
-                new_height = h
-                left = (w - new_width) / 2
+        # Create the temp_faces folder if it does not exist
+        if not os.path.exists('temp_faces'):
+            os.makedirs('temp_faces')
+
+        timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
+
+        target_aspect_ratio = size[0] / size[1] if size else max_side / min_side
+
+        # Detect faces in the image
+        faces = detector.detect_faces(np.array(input_image))
+        if faces:
+            # If faces are detected, find the bounding box that encompasses all faces
+            face_left = min(face['box'][0] for face in faces)
+            face_top = min(face['box'][1] for face in faces)
+            face_right = max(face['box'][0] + face['box'][2] for face in faces)
+            face_bottom = max(face['box'][1] + face['box'][3] for face in faces)
+
+            # Expand the bounding box to include some margin
+            margin = 0.2 * max(face_right - face_left, face_bottom - face_top)
+            face_left = max(0, face_left - margin)
+            face_top = max(0, face_top - margin)
+            face_right = min(w, face_right + margin)
+            face_bottom = min(h, face_bottom + margin)
+
+            # Save the found face
+            found_face = input_image.crop((face_left, face_top, face_right, face_bottom))
+            found_face.save(f'temp_faces/found_face_{timestamp}.png', 'PNG')
+
+            # Determine which sides to crop to keep the face within the cropped area
+            if w / h > target_aspect_ratio:  # Crop horizontally
+                new_width = h * target_aspect_ratio
+                if face_left + new_width > w:  # Face is closer to the right edge
+                    left = w - new_width
+                else:  # Face is closer to the left edge or in the middle
+                    left = face_left
+                right = left + new_width
                 top = 0
-                right = (w + new_width) / 2
                 bottom = h
-            else:
-                # Image is taller than desired aspect ratio
-                new_height = int(w / target_aspect_ratio)
-                new_width = w
-                top = 0  # Changed from: top = (h - new_height) / 2
+            else:  # Crop vertically
+                new_height = w / target_aspect_ratio
+                if face_top + new_height > h:  # Face is closer to the bottom edge
+                    top = h - new_height
+                else:  # Face is closer to the top edge or in the middle
+                    top = face_top
+                bottom = top + new_height
                 left = 0
-                bottom = new_height  # Changed from: bottom = (h + new_height) / 2
                 right = w
 
-            # Crop the image to the target aspect ratio
+            # Crop the image to the calculated area
             input_image = input_image.crop((left, top, right, bottom))
-            print("input image cropped according to target width and height")
             w, h = input_image.size  # Update dimensions after cropping
-        
-            # Resize the image to the specified size
-            input_image = input_image.resize(size, mode)
-            input_image.save('temp.png', 'PNG', overwrite=True)
 
+            # Resize the image to the specified size, if provided
+            if size:
+                input_image = input_image.resize(size, mode)
         else:
-            # Resize logic when size is not specified
-            #print("size is none")
-            ratio = min_side / min(h, w)
-            w, h = round(ratio * w), round(ratio * h)
-            ratio = max_side / max(h, w)
-            input_image = input_image.resize([round(ratio * w), round(ratio * h)], mode)
-            w_resize_new = (round(ratio * w) // base_pixel_number) * base_pixel_number
-            h_resize_new = (round(ratio * h) // base_pixel_number) * base_pixel_number
-            input_image = input_image.resize([w_resize_new, h_resize_new], mode)
-            input_image.save('temp2.png', 'PNG', overwrite=True)
+            # No faces detected, fall back to original resizing logic
+            input_image = input_image.resize(size, mode) if size else input_image
+
+        # Save the final cropped image
+        input_image.save(f'temp_faces/final_cropped_input_face_{timestamp}.png', 'PNG')
 
         if pad_to_max_side:
             # Create a new image with a white background
@@ -650,9 +686,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 model_names = get_model_names()
                 with gr.Row():
                     with gr.Column():
-                        model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
+                        refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
                     with gr.Column():
-                        model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")
+                        model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
+                with gr.Row():
+                    with gr.Column():
+                        model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
                 with gr.Row():
                     with gr.Column():
                         width = gr.Number(label="Width", value=1280, visible=True)
@@ -781,7 +820,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         choices=schedulers,
                         value="EulerDiscreteScheduler",
                     )
-
+            refresh_models.click(
+                fn=refresh_model_names,
+                outputs=model_dropdown
+            )
             submit.click(
                 fn=remove_tips,
                 outputs=usage_tips,
