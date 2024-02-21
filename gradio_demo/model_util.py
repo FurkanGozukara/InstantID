@@ -314,7 +314,10 @@ def load_diffusers_model_xl(
         torch_dtype=weight_dtype,
         cache_dir=DIFFUSERS_CACHE_DIR,
     )
-    vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
+    #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
+    vae = AutoencoderKL.from_pretrained(
+            "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    )
     return tokenizers, text_encoders, unet, vae
 
 

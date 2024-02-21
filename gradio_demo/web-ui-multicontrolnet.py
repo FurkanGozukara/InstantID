@@ -19,7 +19,7 @@ from PIL import Image
 import diffusers
 from diffusers.utils import load_image
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
-
+from diffusers import AutoencoderKL
 from huggingface_hub import hf_hub_download
 
 from insightface.app import FaceAnalysis
@@ -129,7 +129,7 @@ def load_model(pretrained_model_folder, model_name):
     global pipe    
     print(f"Loading model: {model_name}")
     # Properly discard the old pipe if it exists
- 
+    
     if model_name.endswith(
         ".ckpt"
     ) or model_name.endswith(".safetensors"):
@@ -166,9 +166,13 @@ def load_model(pretrained_model_folder, model_name):
             model_path = fr"{pretrained_model_folder}/{model_name}"
         else:
             model_path = model_name
-  
+        # Load vae
+        vae = AutoencoderKL.from_pretrained(
+                "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+        )
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
             model_path,
+            vae = vae,
             controlnet=[controlnet],
             torch_dtype=dtype,
             safety_checker=None,
@@ -559,6 +563,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             
             iteration_start_time = time.time()
             result_images = pipe(
+                device=pipe.device,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 image_embeds=face_emb,

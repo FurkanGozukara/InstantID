@@ -643,6 +643,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
+        device: Optional[torch.device] = None,
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
@@ -838,7 +839,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
             )
        
-        device = self._execution_device
+        _device = self._execution_device 
         controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
        
         # align format for control guidance
@@ -919,7 +920,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         
         # 3.2 Encode image prompt
         prompt_image_emb = self._encode_prompt_image_emb(image_embeds, 
-                                                         device,
+                                                         _device,
                                                          num_images_per_prompt,
                                                          self.unet.dtype,
                                                          do_classifier_free_guidance)
@@ -932,7 +933,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 height=height,
                 batch_size=batch_size * num_images_per_prompt,
                 num_images_per_prompt=num_images_per_prompt,
-                device=device,
+                device=_device,
                 dtype=controlnet.dtype,
                 do_classifier_free_guidance=do_classifier_free_guidance,
                 guess_mode=guess_mode,
@@ -948,7 +949,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     height=height,
                     batch_size=batch_size * num_images_per_prompt,
                     num_images_per_prompt=num_images_per_prompt,
-                    device=device,
+                    device=_device,
                     dtype=controlnet.dtype,
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     guess_mode=guess_mode,
@@ -965,7 +966,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         if control_mask is not None:
             mask_weight_image = control_mask
             mask_weight_image = np.array(mask_weight_image)
-            mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=device, dtype=prompt_embeds.dtype)
+            mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=_device, dtype=prompt_embeds.dtype)
             mask_weight_image_tensor = mask_weight_image_tensor[:, :, 0] / 255.
             mask_weight_image_tensor = mask_weight_image_tensor[None, None]
             h, w = mask_weight_image_tensor.shape[-2:]
@@ -981,7 +982,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             region_control.prompt_image_conditioning = [dict(region_mask=None)]
 
         # 5. Prepare timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
+        self.scheduler.set_timesteps(num_inference_steps, device=_device)
         timesteps = self.scheduler.timesteps
         self._num_timesteps = len(timesteps)
 
@@ -993,7 +994,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             height,
             width,
             prompt_embeds.dtype,
-            device,
+            _device,
             generator,
             latents,
         )
@@ -1004,7 +1005,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
             timestep_cond = self.get_guidance_scale_embedding(
                 guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
-            ).to(device=device, dtype=latents.dtype)
+            ).to(device=_device, dtype=latents.dtype)
 
         # 7. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -1055,9 +1056,9 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
             add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
 
-        prompt_embeds = prompt_embeds.to(device)
-        add_text_embeds = add_text_embeds.to(device)
-        add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.to(_device)
+        add_text_embeds = add_text_embeds.to(_device)
+        add_time_ids = add_time_ids.to(_device).repeat(batch_size * num_images_per_prompt, 1)
         encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb], dim=1)
 
         # 8. Denoising loop
@@ -1067,7 +1068,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         is_torch_higher_equal_2_1 = is_torch_version(">=", "2.1")
 
         #offload tokenizers for safe memory in cpu offload
-        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and self.device.type=='cpu':
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and device.type=='cpu':
             self._all_hooks[0].offload()
             self._all_hooks[0].remove()
             self._all_hooks[1].offload()
@@ -1118,7 +1119,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 if isinstance(self.controlnet, MultiControlNetModel):
                     down_block_res_samples_list, mid_block_res_sample_list = [], []
                     for control_index in range(len(self.controlnet.nets)):
-                        controlnet = self.controlnet.nets[control_index].to(device)                        
+                        controlnet = self.controlnet.nets[control_index].to(_device)                        
                         if control_index == 0:
                             # assume fhe first controlnet is IdentityNet
                             controlnet_prompt_embeds = prompt_image_emb
@@ -1151,7 +1152,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                               zip(*down_block_res_samples_list)]
                     
                 else:
-                    self.controlnet.to(device)
+                    self.controlnet.to(_device)
                     down_block_res_samples, mid_block_res_sample = self.controlnet(
                         control_model_input,
                         t,
@@ -1221,7 +1222,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         callback(step_idx, t, latents)
         
         #offload unet and multicontrolnet to safe memory for vae
-        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and self.device.type=='cpu':
+        if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and device.type=='cpu':
             self._all_hooks[2].offload()
             self._all_hooks[2].remove()
             self._all_hooks[4].offload()
@@ -1230,18 +1231,25 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         clean_memory()
         
         if not output_type == "latent":
-            # make sure the VAE is in float32 mode, as it overflows in float16
-            needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
-            if needs_upcasting:
-                self.upcast_vae()                                                
-                latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
+            #  # make sure the VAE is in float32 mode, as it overflows in float16
+            # needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
+            # if needs_upcasting:
+            #     self.upcast_vae()                                                
+            #     latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
                         
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]            
+            # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]            
 
-            # cast back to fp16/bf16 if needed
-            if needs_upcasting:
-                self.vae.to(dtype=self.dtype)            
-                
+            # # cast back to fp16/bf16 if needed
+            # if needs_upcasting:
+            #     self.vae.to(dtype=self.dtype)  
+
+            if device.type == "cuda":  
+                latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
+                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
+            else:   
+                self.vae.to("cuda")
+                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
+                self.vae.to("cpu")
         else:
             image = latents
 
@@ -1252,7 +1260,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
-        # if self.device.type == 'cpu':
+        # if device.type == 'cpu':
         #     self.maybe_free_model_hooks()
 
         clean_memory()
