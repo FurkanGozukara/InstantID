@@ -15,7 +15,9 @@ def optionally_disable_offloading(_pipeline):
     """
     is_model_cpu_offload = False
     is_sequential_cpu_offload = False
-
+    print(
+            "Restarting CPU Offloading..."
+          )
     if _pipeline is not None:
         for _, component in _pipeline.components.items():
             if isinstance(component, nn.Module) and hasattr(component, "_hf_hook"):
@@ -24,9 +26,7 @@ def optionally_disable_offloading(_pipeline):
                 if not is_sequential_cpu_offload:
                     is_sequential_cpu_offload = isinstance(component._hf_hook, AlignDevicesHook)
 
-                print(
-                    "Accelerate hooks detected. Since you have called `load_lora_weights()`, the previous hooks will be first removed. Then the LoRA parameters will be loaded and the hooks will be applied again."
-                )
-                remove_hook_from_module(component, recurse=is_sequential_cpu_offload)
+               
+                remove_hook_from_module(component, recurse=True)
 
     return (is_model_cpu_offload, is_sequential_cpu_offload)

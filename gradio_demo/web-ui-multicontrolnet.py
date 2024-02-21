@@ -190,7 +190,7 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
         pipe.enable_model_cpu_offload()        
     else:
         pipe.to(device)
-    
+    clean_memory()  
     pipe.enable_xformers_memory_efficient_attention()
     pipe.enable_vae_slicing()
     pipe.enable_vae_tiling() 
@@ -245,12 +245,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
        
         # Reload CPU offload to fix bug for half mode
         if pipe and ENABLE_CPU_OFFLOAD:
-            pipe.disable_xformers_memory_efficient_attention()
-            set_ip_adapter(adapter_strength_ratio)            
-            from pipelines.pipeline_common import optionally_disable_offloading
-            optionally_disable_offloading(pipe)
-            pipe.enable_model_cpu_offload()
-            pipe.enable_xformers_memory_efficient_attention()
+            restart_cpu_offload(adapter_strength_ratio)
 
         if not pipe:
             pipe = None            
@@ -288,7 +283,15 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
         
         print("Model loaded successfully.")
+
+    def restart_cpu_offload(adapter_strength_ratio):
+        pipe.disable_xformers_memory_efficient_attention()
+        set_ip_adapter(adapter_strength_ratio)            
+        from pipelines.pipeline_common import optionally_disable_offloading
+        optionally_disable_offloading(pipe)
         clean_memory()
+        pipe.enable_model_cpu_offload()
+        pipe.enable_xformers_memory_efficient_attention()
 
     def toggle_lcm_ui(value):
         if value:
@@ -575,8 +578,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
             iteration_end_time = time.time()
             iteration_time = iteration_end_time - iteration_start_time
-            
             print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
+            if num_images > 1 and  ENABLE_CPU_OFFLOAD:                 
+                restart_cpu_offload(adapter_strength_ratio)
             
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
@@ -668,6 +672,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     info="Give simple prompt is enough to achieve good face fidelity",
                     placeholder="A photo of a person",
                     value="",
+                    
                 )
 
                 submit = gr.Button("Submit", variant="primary")
@@ -693,15 +698,15 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         width = gr.Number(label="Width", value=1280, visible=True)
                     with gr.Column():
                         height = gr.Number(label="Height", value=1280, visible=True)
-                    with gr.Column():
-                        num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
-
-        with gr.Row():       
+        with gr.Row():
             with gr.Column():                
                 enable_LCM = gr.Checkbox(
-                    label="Enable Fast Inference with LCM", value=enable_lcm_arg,
-                    info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
-                )
+                label="Enable Fast Inference with LCM", value=enable_lcm_arg,
+                info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
+            )
+            with gr.Column():
+                num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
+        
         with gr.Row():       
             with gr.Column():       
                 depth_type = gr.Dropdown(

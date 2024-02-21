@@ -626,8 +626,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
         
-        if self.device.type == 'cuda':
-            prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
+        #if self.device.type == 'cuda':
+        prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
                                                 dtype=self.image_proj_model.latents.dtype)
             
         prompt_image_emb = self.image_proj_model(prompt_image_emb)
@@ -637,7 +637,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
         
         return prompt_image_emb.to(device=device, dtype=dtype)
-     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+    
     
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -1231,17 +1231,16 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16
-            needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
+            needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
             if needs_upcasting:
                 self.upcast_vae()                                                
                 latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
-            
-            #self.vae.to("cpu", non_blocking=True) 
+                        
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]            
 
-            # cast back to fp16 if needed
+            # cast back to fp16/bf16 if needed
             if needs_upcasting:
-                self.vae.to(dtype=torch.float16)            
+                self.vae.to(dtype=self.dtype)            
                 
         else:
             image = latents
@@ -1253,8 +1252,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
-        #if self.device.type == 'cpu':
-        #    self.maybe_free_model_hooks()
+        # if self.device.type == 'cpu':
+        #     self.maybe_free_model_hooks()
 
         clean_memory()
         if not return_dict:
