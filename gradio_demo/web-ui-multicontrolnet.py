@@ -672,6 +672,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     info="Give simple prompt is enough to achieve good face fidelity",
                     placeholder="A photo of a person",
                     value="",
+                    
                 )
 
                 submit = gr.Button("Submit", variant="primary")
@@ -697,15 +698,15 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         width = gr.Number(label="Width", value=1280, visible=True)
                     with gr.Column():
                         height = gr.Number(label="Height", value=1280, visible=True)
-                    with gr.Column():
-                        num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
-
-        with gr.Row():       
+        with gr.Row():
             with gr.Column():                
                 enable_LCM = gr.Checkbox(
-                    label="Enable Fast Inference with LCM", value=enable_lcm_arg,
-                    info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
-                )
+                label="Enable Fast Inference with LCM", value=enable_lcm_arg,
+                info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
+            )
+            with gr.Column():
+                num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
+        
         with gr.Row():       
             with gr.Column():       
                 depth_type = gr.Dropdown(
