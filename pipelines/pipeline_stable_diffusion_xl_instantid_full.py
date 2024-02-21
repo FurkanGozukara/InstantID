@@ -1248,6 +1248,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
             else:   
                 self.vae.to("cuda")
+                if latents.dtype != torch.float16:
+                    latents = latents.to(torch.float16)
                 image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
                 self.vae.to("cpu")
         else:
