@@ -1,4 +1,6 @@
+from http.client import MULTIPLE_CHOICES
 import sys
+from unittest import defaultTestLoader
 sys.path.append("./")
 
 from typing import Tuple
@@ -48,6 +50,10 @@ parser.add_argument("--lowvram", action="store_true", help="Enable CPU offload f
 parser.add_argument("--fp16", action="store_true", help="fp16")
 parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
 
+parser.add_argument(
+"--loras_path", type=str, default=None
+)
+
 args = parser.parse_args()
 
 torch.backends.cuda.matmul.allow_tf32 = True   
@@ -70,6 +76,7 @@ default_model = "wangqixun/YamerMIX_v8"
 last_loaded_model = None
 last_loaded_scheduler = None
 last_loaded_depth_estimator = None
+last_LCM_status = None
 
 pipe = None
 controlnet = None
@@ -112,6 +119,18 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
 
 
 used_model_path='models'
+used_lora_path='loras'
+
+def get_lora_model_names():
+    global used_lora_path
+    if args.loras_path:
+        if os.path.exists:
+            used_lora_path=args.loras_path
+    if not os.path.exists(used_lora_path):
+        os.makedirs(used_lora_path)
+    lora_files = []
+    lora_files = lora_files + [f for f in os.listdir(used_lora_path) if f.endswith('.safetensors')]
+    return lora_files
 
 def get_model_names():
     global used_model_path
@@ -145,12 +164,14 @@ def load_model(pretrained_model_folder, model_name):
             local_dir=fr"{pretrained_model_folder}/wangqixun/YamerMIX_v8",
             local_dir_use_symlinks=False
         )
+
         (tokenizers, text_encoders, unet, _, vae) = load_models_xl(
         pretrained_model_name_or_path=model_path,
         scheduler_name=None,
         weight_dtype=dtype,
         )
         scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
+        print(f"vae dtype {vae.dtype}")
         pipe = StableDiffusionXLInstantIDPipeline(            
             vae=vae,
             text_encoder=text_encoders[0],
@@ -170,6 +191,7 @@ def load_model(pretrained_model_folder, model_name):
         vae = AutoencoderKL.from_pretrained(
                 "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
         )
+        print(f"vae dtype {vae.dtype}")
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
             model_path,
             vae = vae,
@@ -182,7 +204,8 @@ def load_model(pretrained_model_folder, model_name):
 	
 def refresh_model_names():
     model_names = get_model_names()
-    return gr.update(choices=model_names)	
+    lora_model_names = get_lora_model_names()
+    return gr.update(choices=model_names), gr.update(choices=lora_model_names)
 
 def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     global pipe
@@ -204,13 +227,13 @@ def set_ip_adapter(adapter_strength_ratio):
     pipe.set_ip_adapter_scale(adapter_strength_ratio)
     
 
+
 def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
      
     # load and disable LCM
-    lora_model = "latent-consistency/lcm-lora-sdxl" if not pretrained_model_folder else fr"{pretrained_model_folder}/latent-consistency/lcm-lora-sdxl"
-    pipe.load_lora_weights(lora_model)  
-
     if with_LCM:
+        lora_model = "latent-consistency/lcm-lora-sdxl"
+        pipe.load_lora_weights(lora_model)  
         pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
         pipe.enable_lora()
     else:
@@ -230,11 +253,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
     global used_model_path
+    global used_lora_path
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown):
         global pipe  # Declare pipe as a global variable thas_cpu_offload manage it when the model changes
-        global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator
+        global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status
      
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
@@ -261,6 +285,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
+            last_LCM_status = with_LCM
             last_loaded_depth_estimator = depth_type
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
@@ -272,7 +297,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         # Reload scheduler if needed
         if (pipe and model_to_load == last_loaded_model 
-            and scheduler != last_loaded_scheduler):            
+            and scheduler != last_loaded_scheduler):
+            last_LCM_status = with_LCM
+            load_scheduler(pretrained_model_folder, scheduler, with_LCM)
+            last_loaded_scheduler = scheduler
+
+        if (pipe and model_to_load == last_loaded_model 
+            and last_LCM_status != with_LCM):
+            last_LCM_status = with_LCM
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_loaded_scheduler = scheduler
        
@@ -282,10 +314,17 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
             last_loaded_scheduler = scheduler
+            last_LCM_status = with_LCM
             last_loaded_depth_estimator = depth_type
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
         
+        pipe.unload_lora_weights()
+        for lora_model in lora_model_dropdown:
+            lora_path = os.path.join(used_lora_path, lora_model)
+            print(f"lora_path {lora_path}")
+            pipe.load_lora_weights(lora_path)
+
         print("Model loaded successfully.")
 
     def restart_cpu_offload(adapter_strength_ratio):
@@ -483,6 +522,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         num_images,
         guidance_threshold,
         depth_type,
+        lora_model_dropdown,
         progress=gr.Progress(track_tqdm=True),
     ):
         global controlnet_map, controlnet_map_fn
@@ -543,7 +583,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type,lora_model_dropdown)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
@@ -698,6 +738,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 with gr.Row():
                     with gr.Column():
                         refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
+                        lora_model_names = get_lora_model_names()
+                        lora_model_dropdown = gr.Dropdown(label="Select LoRA models",multiselect=True, choices=lora_model_names, value=[])
                     with gr.Column():
                         model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
                 with gr.Row():
@@ -833,7 +875,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     )
             refresh_models.click(
                 fn=refresh_model_names,
-                outputs=model_dropdown
+                outputs=[model_dropdown, lora_model_dropdown]
             )
             submit.click(
                 fn=remove_tips,
@@ -863,7 +905,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     seed,
                     scheduler,
                     enable_LCM,                    
-                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type
+                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type,
+                    lora_model_dropdown
                 ],
                 outputs=[gallery, usage_tips],
             )

@@ -1244,12 +1244,21 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             #     self.vae.to(dtype=self.dtype)  
 
             if device.type == "cuda":  
+                print(f"VAE cuda mode")
                 latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
                 image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
-            else:   
+            else:  
+                
                 self.vae.to("cuda")
                 if latents.dtype != torch.float16:
                     latents = latents.to(torch.float16)
+                #if latents.dtype != self.vae.dtype:
+                #    latents = latents.to(self.vae.dtype)
+                #if(latents.dtype==torch.float16):
+                #    latents = latents.to(torch.float)
+                #    self.vae = self.vae.to(torch.float)
+                print(f"latent dtype {latents.dtype}")
+                print(f"self.vae dtype {self.vae.dtype}")
                 image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0] 
                 self.vae.to("cpu")
         else:

@@ -202,7 +202,10 @@ def load_diffusers_model(
         cache_dir=DIFFUSERS_CACHE_DIR,
     )
 
-    vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
+    #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
+    vae = AutoencoderKL.from_pretrained(
+            "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    )
 
     return tokenizer, text_encoder, unet, vae
 
@@ -332,7 +335,9 @@ def load_checkpoint_model_xl(
     )
 
     unet = pipe.unet
-    vae = pipe.vae
+    vae = AutoencoderKL.from_pretrained(
+            "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    )
     tokenizers = [pipe.tokenizer, pipe.tokenizer_2]
     text_encoders = [pipe.text_encoder, pipe.text_encoder_2]
     if len(text_encoders) == 2:
