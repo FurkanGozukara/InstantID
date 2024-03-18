@@ -94,6 +94,40 @@ face_adapter = f"checkpoints/ip-adapter.bin"
 controlnet = None
 controlnet_map = {}
 
+def set_metadata_settings(image_path):
+    if image_path is None:
+        return gr.update()
+    
+    # Open the image and extract metadata
+    with Image.open(image_path) as img:
+        metadata = img.info
+
+        # Extract and set the relevant metadata settings
+        prompt = metadata.get("Prompt", "")
+        negative_prompt = metadata.get("Negative Prompt", "")
+        enable_LCM = metadata.get("Enable Fast Inference with LCM", "False") == "True"
+        depth_type = metadata.get("Depth Estimator", "LiheYoung/depth_anything")
+        identitynet_strength_ratio = float(metadata.get("IdentityNet strength (for fidelity)", "0.80"))
+        adapter_strength_ratio = float(metadata.get("Image Adapter Strength", "0.80"))
+        pose_strength = float(metadata.get("Pose strength", "0.40"))
+        canny_strength = float(metadata.get("Canny strength", "0.40"))
+        depth_strength = float(metadata.get("Depth strength", "0.40"))
+        controlnet_selection = metadata.get("used Controlnets", "").split(", ")
+        model_dropdown = metadata.get("Dropdown Selected Model", None)
+        model_input = metadata.get("Full Model Path - Used If Set", "")
+        lora_model_dropdown = metadata.get("Select LoRA models", "").split(", ")
+        width_target = int(metadata.get("Target Image Width", "1280"))
+        height_target = int(metadata.get("Target Image Height", "1280"))
+        style_name = metadata.get("Style Template", DEFAULT_STYLE_NAME)
+        num_steps = int(metadata.get("Number Of Sample Steps", "5"))
+        guidance_scale = float(metadata.get("CFG Scale", "5.0"))
+        guidance_threshold = float(metadata.get("CFG Threshold", "1.0"))
+        seed = int(metadata.get("Used Seed", "42"))
+        enhance_face_region = metadata.get("Enhance non-face region", "True") == "True"
+        scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
+
+        return gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)
+
 def read_image_metadata(image_path):
     if image_path is None:
         return
@@ -737,7 +771,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     # Description
     title = r"""
-    <h1 align="center">InstantID V12: Zero-shot Identity-Preserving Generation in Seconds</h1>
+    <h1 align="center">InstantID: Zero-shot Identity-Preserving Generation in Seconds</h1>
     """
 
     description = r"""
@@ -764,7 +798,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId"):
+        with gr.Tab("InstantId - V12"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -992,10 +1026,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     queue=False,
                 )
         with gr.Tab("Image Metadata"):
+
             with gr.Row():
-                metadata_image_input = gr.Image(type="filepath", label="Upload Image")
+                set_metadata_button = gr.Button("Load & Set Metadata Settings")
+            with gr.Row():
+                metadata_image_input = gr.Image(type="filepath", label="Upload Image")                
                 metadata_output = gr.Textbox(label="Image Metadata", lines=25, max_lines=50)
             metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
+            set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler])
 
         gr.Markdown(article)
     demo.launch(inbrowser=True, share=share)
