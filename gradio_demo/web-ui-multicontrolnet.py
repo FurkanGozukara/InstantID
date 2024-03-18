@@ -104,6 +104,8 @@ def set_metadata_settings(image_path):
 
         # Extract and set the relevant metadata settings
         prompt = metadata.get("Prompt", "")
+        face_file = metadata.get("Upload a photo of your face full path", "")
+        pose_file = metadata.get("Upload a reference pose image (Optional) full path", "")
         negative_prompt = metadata.get("Negative Prompt", "")
         enable_LCM = metadata.get("Enable Fast Inference with LCM", "False") == "True"
         depth_type = metadata.get("Depth Estimator", "LiheYoung/depth_anything")
@@ -126,7 +128,21 @@ def set_metadata_settings(image_path):
         enhance_face_region = metadata.get("Enhance non-face region", "True") == "True"
         scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
 
-        return gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)
+    updates = [gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)]
+
+    # Update the source images only if the file paths are non-empty
+    if len(face_file) > 5:
+        updates.append(gr.update(value=face_file))
+    else:
+        updates.append(gr.update())  # Do not update if the path is empty
+
+    if len(pose_file) > 5:
+        updates.append(gr.update(value=pose_file))
+    else:
+        updates.append(gr.update())  # Do not update if the path is empty
+
+    return tuple(updates)
+
 
 def read_image_metadata(image_path):
     if image_path is None:
@@ -1033,7 +1049,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 metadata_image_input = gr.Image(type="filepath", label="Upload Image")                
                 metadata_output = gr.Textbox(label="Image Metadata", lines=25, max_lines=50)
             metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
-            set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler])
+        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file])
 
         gr.Markdown(article)
     demo.launch(inbrowser=True, share=share)
