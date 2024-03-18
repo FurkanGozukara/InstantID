@@ -4,7 +4,7 @@ from unittest import defaultTestLoader
 sys.path.append("./")
 
 from typing import Tuple
-
+from PIL import PngImagePlugin
 import time
 from datetime import datetime
 import os
@@ -94,6 +94,41 @@ face_adapter = f"checkpoints/ip-adapter.bin"
 controlnet = None
 controlnet_map = {}
 
+def read_image_metadata(image_path):
+    if image_path is None:
+        return
+    # Check if the file exists
+    if not os.path.exists(image_path):
+        return "File does not exist."
+
+    # Get the last modified date and format it
+    last_modified_timestamp = os.path.getmtime(image_path)
+    last_modified_date = datetime.fromtimestamp(last_modified_timestamp).strftime('%d %B %Y, %H:%M %p - UTC')
+
+    # Open the image and extract metadata
+    with Image.open(image_path) as img:
+        width, height = img.size
+        megapixels = (width * height) / 1e6
+
+        metadata_str = f"Last Modified Date: {last_modified_date}\nMegapixels: {megapixels:.2f}\n"
+
+        # Extract metadata based on image format
+        if img.format == 'JPEG':
+            exif_data = img._getexif()
+            if exif_data:
+                for tag, value in exif_data.items():
+                    tag_name = Image.ExifTags.TAGS.get(tag, tag)
+                    metadata_str += f"{tag_name}: {value}\n"
+        else:
+            metadata = img.info
+            if metadata:
+                for key, value in metadata.items():
+                    metadata_str += f"{key}: {value}\n"
+            else:
+                metadata_str += "No additional metadata found."
+
+    return metadata_str
+
 def load_controlnet_open_pose(pretrained_model_folder):
     global controlnet, controlnet_map, controlnet_map_fn
 
@@ -117,9 +152,16 @@ def load_depth_estimator(pretrained_model_folder,depth_type):
         controlnet_map_fn["depth"]=get_depth_map
 
 
-
+import platform
 used_model_path='models'
 used_lora_path='loras'
+
+def open_folder():
+    open_folder_path = os.path.abspath("outputs")
+    if platform.system() == "Windows":
+        os.startfile(open_folder_path)
+    elif platform.system() == "Linux":
+        os.system(f'xdg-open "{open_folder_path}"')
 
 def get_lora_model_names():
     global used_lora_path
@@ -623,7 +665,37 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             output_path = f"outputs/{current_time}.png"
             if not os.path.exists("outputs"):
                 os.makedirs("outputs")
-            image.save(output_path)
+            meta = PngImagePlugin.PngInfo()
+            meta.add_text("Upload a photo of your face full path", str(face_image_path))
+            meta.add_text("Upload a photo of your face image file name", os.path.basename(face_image_path) if face_image_path else "")
+            meta.add_text("Upload a reference pose image (Optional) full path", str(pose_image_path))
+            meta.add_text("Upload a reference pose image (Optional) image file name", os.path.basename(pose_image_path) if pose_image_path else "")
+            meta.add_text("", "")
+            meta.add_text("Prompt", str(prompt))
+            meta.add_text("", "")
+            meta.add_text("Negative Prompt", str(negative_prompt))
+            meta.add_text("Enable Fast Inference with LCM", str(enable_LCM))
+            meta.add_text("Depth Estimator", str(depth_type))
+            meta.add_text("IdentityNet strength (for fidelity)", str(identitynet_strength_ratio))
+            meta.add_text("Pose strength", str(pose_strength))
+            meta.add_text("Canny strength", str(canny_strength))
+            meta.add_text("Depth strength", str(depth_strength))
+            meta.add_text("used Controlnets", ", ".join(controlnet_selection))
+            meta.add_text("Dropdown Selected Model", str(model_dropdown))
+            meta.add_text("Default Model - Used If None Selected", str(default_model))
+            meta.add_text("Full Model Path - Used If Set", str(model_input))
+            meta.add_text("Select LoRA models", ", ".join(lora_model_dropdown))
+            meta.add_text("Target Image Width", str(width_target))
+            meta.add_text("Target Image Height", str(height_target))
+            meta.add_text("Style Template", str(style_name))
+            meta.add_text("Image Adapter Strength", str(adapter_strength_ratio))
+            meta.add_text("Number Of Sample Steps", str(num_steps))
+            meta.add_text("CFG Scale", str(guidance_scale))
+            meta.add_text("CFG Threshold", str(guidance_threshold))
+            meta.add_text("Used Seed", str(seed))
+            meta.add_text("Enhance non-face region", str(enhance_face_region))
+            meta.add_text("Used Scheduler", str(scheduler))
+            image.save(output_path, "PNG", pnginfo=meta)
             images_generated.append(image)
 
             iteration_end_time = time.time()
@@ -665,7 +737,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     # Description
     title = r"""
-    <h1 align="center">InstantID: Zero-shot Identity-Preserving Generation in Seconds</h1>
+    <h1 align="center">InstantID V12: Zero-shot Identity-Preserving Generation in Seconds</h1>
     """
 
     description = r"""
@@ -692,231 +764,238 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        # description
-        gr.Markdown(title)
-        gr.Markdown(description)
-
-        with gr.Row():
-            with gr.Column():
-                with gr.Row(equal_height=True):
-                    # upload face image
-                    face_file = gr.Image(
-                        label="Upload a photo of your face", type="filepath"
-                    )
-                    # optional: upload a reference pose image
-                    pose_file = gr.Image(
-                        label="Upload a reference pose image (Optional)",
-                        type="filepath",
-                    )
-            with gr.Column(scale=1):
+        with gr.Tab("InstantId"):
+            gr.Markdown(title)
+            gr.Markdown(description)
             
-                gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512)
-                usage_tips = gr.Markdown(
-                    label="InstantID Usage Tips", value=tips, visible=False
-                )
-        with gr.Row():
-            with gr.Column():
-                # prompt
-                prompt = gr.Textbox(
-                    label="Prompt",
-                    info="Give simple prompt is enough to achieve good face fidelity",
-                    placeholder="A photo of a person",
-                    value="",
+            with gr.Row():
+                with gr.Column():
+                    with gr.Row(equal_height=True):
+                        # upload face image
+                        face_file = gr.Image(
+                            label="Upload a photo of your face", type="filepath"
+                        )
+                        # optional: upload a reference pose image
+                        pose_file = gr.Image(
+                            label="Upload a reference pose image (Optional)",
+                            type="filepath",
+                        )
+                with gr.Column(scale=1):
+            
+                    gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512)
+                    usage_tips = gr.Markdown(
+                        label="InstantID Usage Tips", value=tips, visible=False
+                    )
+            with gr.Row():
+                with gr.Column():
+                    # prompt
+                    prompt = gr.Textbox(
+                        label="Prompt",
+                        info="Give simple prompt is enough to achieve good face fidelity",
+                        placeholder="A photo of a person",
+                        value="",
                     
-                )
-
-                submit = gr.Button("Submit", variant="primary")
-
-                negative_prompt = gr.Textbox(
-                        label="Negative Prompt",
-                        placeholder="low quality",
-                        value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
                     )
 
-            with gr.Column():
-                model_names = get_model_names()
-                with gr.Row():
-                    with gr.Column():
-                        refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
-                        lora_model_names = get_lora_model_names()
-                        lora_model_dropdown = gr.Dropdown(label="Select LoRA models",multiselect=True, choices=lora_model_names, value=[])
-                    with gr.Column():
-                        model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
-                with gr.Row():
-                    with gr.Column():
-                        model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
-                with gr.Row():
-                    with gr.Column():
-                        width = gr.Number(label="Width", value=1280, visible=True)
-                    with gr.Column():
-                        height = gr.Number(label="Height", value=1280, visible=True)
-        with gr.Row():
-            with gr.Column():                
-                enable_LCM = gr.Checkbox(
-                label="Enable Fast Inference with LCM", value=enable_lcm_arg,
-                info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
-            )
-            with gr.Column():
-                num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
+                    submit = gr.Button("Submit", variant="primary")
+
+                    negative_prompt = gr.Textbox(
+                            label="Negative Prompt",
+                            placeholder="low quality",
+                            value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
+                        )
+
+                with gr.Column():
+                    model_names = get_model_names()
+                    with gr.Row():
+                        with gr.Column():
+                            refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
+                            lora_model_names = get_lora_model_names()
+                            lora_model_dropdown = gr.Dropdown(label="Select LoRA models",multiselect=True, choices=lora_model_names, value=[])
+                        with gr.Column():
+                            model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
+                            btn_open_outputs = gr.Button("Open Outputs Folder")
+                            btn_open_outputs.click(fn=open_folder)
+                    with gr.Row():
+                        with gr.Column():
+                            model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
+                    with gr.Row():
+                        with gr.Column():
+                            width = gr.Number(label="Width", value=1280, visible=True)
+                        with gr.Column():
+                            height = gr.Number(label="Height", value=1280, visible=True)
+            with gr.Row():
+                with gr.Column():                
+                    enable_LCM = gr.Checkbox(
+                    label="Enable Fast Inference with LCM", value=enable_lcm_arg,
+                    info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
+                )
+                with gr.Column():
+                    num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
         
-        with gr.Row():       
-            with gr.Column():       
-                depth_type = gr.Dropdown(
-                label="Depth Estimator",
-                choices=DEPTH_ESTIMATOR,
-                value="LiheYoung/depth_anything")
+            with gr.Row():       
+                with gr.Column():       
+                    depth_type = gr.Dropdown(
+                    label="Depth Estimator",
+                    choices=DEPTH_ESTIMATOR,
+                    value="LiheYoung/depth_anything")
 
-            with gr.Column():       
-                style = gr.Dropdown(
-                    label="Style template",
-                    choices=STYLE_NAMES,
-                    value=DEFAULT_STYLE_NAME,
-                )           
-        with gr.Row():         
-            with gr.Column():  
-                # strength
-                identitynet_strength_ratio = gr.Slider(
-                    label="IdentityNet strength (for fidelity)",
-                    minimum=0,
-                    maximum=1.5,
-                    step=0.05,
-                    value=0.80,
+                with gr.Column():       
+                    style = gr.Dropdown(
+                        label="Style template",
+                        choices=STYLE_NAMES,
+                        value=DEFAULT_STYLE_NAME,
+                    )           
+            with gr.Row():         
+                with gr.Column():  
+                    # strength
+                    identitynet_strength_ratio = gr.Slider(
+                        label="IdentityNet strength (for fidelity)",
+                        minimum=0,
+                        maximum=1.5,
+                        step=0.05,
+                        value=0.80,
+                    )
+                with gr.Column():  
+                    adapter_strength_ratio = gr.Slider(
+                        label="Image adapter strength (for detail)",
+                        minimum=0,
+                        maximum=1.5,
+                        step=0.05,
+                        value=0.80,
+                    )
+
+
+            with gr.Row():
+                with gr.Column():
+                    with gr.Row():
+
+                        pose_strength = gr.Slider(
+                            label="Pose strength",
+                            minimum=0,
+                            maximum=1.5,
+                            step=0.05,
+                            value=0.40,
+                        )
+                        canny_strength = gr.Slider(
+                            label="Canny strength",
+                            minimum=0,
+                            maximum=1.5,
+                            step=0.05,
+                            value=0.40,
+                        )
+                        depth_strength = gr.Slider(
+                            label="Depth strength",
+                            minimum=0,
+                            maximum=1.5,
+                            step=0.05,
+                            value=0.40,
+                        )
+                    with gr.Row():
+                        controlnet_selection = gr.CheckboxGroup(
+                            ["pose", "canny", "depth"], label="Controlnet", value=None,
+                            info="Use pose for skeleton inference, canny for edge detection, and depth for depth map estimation. You can try all three to control the generation process"
+                        )
+                with gr.Column():
+
+                    with gr.Row():
+
+                        num_steps = gr.Slider(
+                            label="Number of sample steps",
+                            minimum=1,
+                            maximum=100,
+                            step=1,
+                            value=5 if enable_lcm_arg else 30,
+                        )
+                        guidance_scale = gr.Slider(
+                            label="CFG scale",
+                            minimum=0.1,
+                            maximum=20.0,
+                            step=0.1,
+                            value=0.0 if enable_lcm_arg else 5.0,
+                        )
+                        guidance_threshold = gr.Slider(
+                            label="CFG threshold",
+                            minimum=0.4,
+                            maximum=1,
+                            step=0.1,
+                            value=1,
+                        )
+                        seed = gr.Slider(
+                            label="Seed",
+                            minimum=0,
+                            maximum=MAX_SEED,
+                            step=1,
+                            value=42,
+                        )
+
+                        randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
+                        enhance_face_region = gr.Checkbox(label="Enhance non-face region", value=True)
+                    with gr.Row():
+                        schedulers = [
+                            "DEISMultistepScheduler",
+                            "HeunDiscreteScheduler",
+                            "EulerAncestralDiscreteScheduler",
+                            "EulerDiscreteScheduler",
+                            "DPMSolverMultistepScheduler",
+                            "DPMSolverMultistepScheduler-Karras",
+                            "DPMSolverMultistepScheduler-Karras-SDE",
+                            "UniPCMultistepScheduler"
+                        ]
+                        scheduler = gr.Dropdown(
+                            label="Schedulers",
+                            choices=schedulers,
+                            value="EulerDiscreteScheduler",
+                        )
+                refresh_models.click(
+                    fn=refresh_model_names,
+                    outputs=[model_dropdown, lora_model_dropdown]
                 )
-            with gr.Column():  
-                adapter_strength_ratio = gr.Slider(
-                    label="Image adapter strength (for detail)",
-                    minimum=0,
-                    maximum=1.5,
-                    step=0.05,
-                    value=0.80,
+                submit.click(
+                    fn=remove_tips,
+                    outputs=usage_tips,
+                ).then(
+                    fn=randomize_seed_fn,
+                    inputs=[seed, randomize_seed],
+                    outputs=seed,
+                    queue=False,
+                    api_name=False,
+                ).then(
+                    fn=generate_image,
+                    inputs=[
+                        face_file,
+                        pose_file,
+                        prompt,
+                        negative_prompt,
+                        style,
+                        num_steps,
+                        identitynet_strength_ratio,
+                        adapter_strength_ratio,
+                        pose_strength,
+                        canny_strength,
+                        depth_strength,
+                        controlnet_selection,
+                        guidance_scale,
+                        seed,
+                        scheduler,
+                        enable_LCM,                    
+                        enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type,
+                        lora_model_dropdown
+                    ],
+                    outputs=[gallery, usage_tips],
                 )
 
-
-        with gr.Row():
-            with gr.Column():
-                with gr.Row():
-
-                    pose_strength = gr.Slider(
-                        label="Pose strength",
-                        minimum=0,
-                        maximum=1.5,
-                        step=0.05,
-                        value=0.40,
-                    )
-                    canny_strength = gr.Slider(
-                        label="Canny strength",
-                        minimum=0,
-                        maximum=1.5,
-                        step=0.05,
-                        value=0.40,
-                    )
-                    depth_strength = gr.Slider(
-                        label="Depth strength",
-                        minimum=0,
-                        maximum=1.5,
-                        step=0.05,
-                        value=0.40,
-                    )
-                with gr.Row():
-                    controlnet_selection = gr.CheckboxGroup(
-                        ["pose", "canny", "depth"], label="Controlnet", value=None,
-                        info="Use pose for skeleton inference, canny for edge detection, and depth for depth map estimation. You can try all three to control the generation process"
-                    )
-            with gr.Column():
-
-                with gr.Row():
-
-                    num_steps = gr.Slider(
-                        label="Number of sample steps",
-                        minimum=1,
-                        maximum=100,
-                        step=1,
-                        value=5 if enable_lcm_arg else 30,
-                    )
-                    guidance_scale = gr.Slider(
-                        label="CFG scale",
-                        minimum=0.1,
-                        maximum=20.0,
-                        step=0.1,
-                        value=0.0 if enable_lcm_arg else 5.0,
-                    )
-                    guidance_threshold = gr.Slider(
-                        label="CFG threshold",
-                        minimum=0.4,
-                        maximum=1,
-                        step=0.1,
-                        value=1,
-                    )
-                    seed = gr.Slider(
-                        label="Seed",
-                        minimum=0,
-                        maximum=MAX_SEED,
-                        step=1,
-                        value=42,
-                    )
-
-                    randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
-                    enhance_face_region = gr.Checkbox(label="Enhance non-face region", value=True)
-                with gr.Row():
-                    schedulers = [
-                        "DEISMultistepScheduler",
-                        "HeunDiscreteScheduler",
-                        "EulerAncestralDiscreteScheduler",
-                        "EulerDiscreteScheduler",
-                        "DPMSolverMultistepScheduler",
-                        "DPMSolverMultistepScheduler-Karras",
-                        "DPMSolverMultistepScheduler-Karras-SDE",
-                        "UniPCMultistepScheduler"
-                    ]
-                    scheduler = gr.Dropdown(
-                        label="Schedulers",
-                        choices=schedulers,
-                        value="EulerDiscreteScheduler",
-                    )
-            refresh_models.click(
-                fn=refresh_model_names,
-                outputs=[model_dropdown, lora_model_dropdown]
-            )
-            submit.click(
-                fn=remove_tips,
-                outputs=usage_tips,
-            ).then(
-                fn=randomize_seed_fn,
-                inputs=[seed, randomize_seed],
-                outputs=seed,
-                queue=False,
-                api_name=False,
-            ).then(
-                fn=generate_image,
-                inputs=[
-                    face_file,
-                    pose_file,
-                    prompt,
-                    negative_prompt,
-                    style,
-                    num_steps,
-                    identitynet_strength_ratio,
-                    adapter_strength_ratio,
-                    pose_strength,
-                    canny_strength,
-                    depth_strength,
-                    controlnet_selection,
-                    guidance_scale,
-                    seed,
-                    scheduler,
-                    enable_LCM,                    
-                    enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type,
-                    lora_model_dropdown
-                ],
-                outputs=[gallery, usage_tips],
-            )
-
-            enable_LCM.input(
-                fn=toggle_lcm_ui,
-                inputs=[enable_LCM],
-                outputs=[num_steps, guidance_scale],
-                queue=False,
-            )
+                enable_LCM.input(
+                    fn=toggle_lcm_ui,
+                    inputs=[enable_LCM],
+                    outputs=[num_steps, guidance_scale],
+                    queue=False,
+                )
+        with gr.Tab("Image Metadata"):
+            with gr.Row():
+                metadata_image_input = gr.Image(type="filepath", label="Upload Image")
+                metadata_output = gr.Textbox(label="Image Metadata", lines=25, max_lines=50)
+            metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
 
         gr.Markdown(article)
     demo.launch(inbrowser=True, share=share)
