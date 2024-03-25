@@ -10,7 +10,7 @@ peft
 huggingface-hub==0.20.2
 opencv-python
 insightface
-gradio
+gradio==4.19.0
 controlnet_aux
 gdown
 peft
