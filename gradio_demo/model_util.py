@@ -164,6 +164,7 @@ def load_diffusers_model(
     v2: bool = False,
     clip_skip: Optional[int] = None,
     weight_dtype: torch.dtype = torch.float32,
+    weight_quantize_dtype: torch.dtype = torch.float32,
 ) -> Tuple[CLIPTokenizer, CLIPTextModel, UNet2DConditionModel,]:
     if v2:
         tokenizer = CLIPTokenizer.from_pretrained(
@@ -200,7 +201,7 @@ def load_diffusers_model(
         subfolder="unet",
         torch_dtype=weight_dtype,
         cache_dir=DIFFUSERS_CACHE_DIR,
-    )
+    ).to(weight_quantize_dtype)
 
     #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
     vae = AutoencoderKL.from_pretrained(
@@ -251,16 +252,17 @@ def load_models(
     v2: bool = False,
     v_pred: bool = False,
     weight_dtype: torch.dtype = torch.float32,
+    weight_quantize_dtype: torch.dtype = torch.float32,
 ) -> Tuple[CLIPTokenizer, CLIPTextModel, UNet2DConditionModel, SchedulerMixin,]:
     if pretrained_model_name_or_path.endswith(
         ".ckpt"
     ) or pretrained_model_name_or_path.endswith(".safetensors"):
         tokenizer, text_encoder, unet, vae = load_checkpoint_model(
-            pretrained_model_name_or_path, v2=v2, weight_dtype=weight_dtype
+            pretrained_model_name_or_path, v2=v2, weight_dtype=weight_dtype, weight_quantize_dtype=weight_quantize_dtype
         )
     else:  # diffusers
         tokenizer, text_encoder, unet, vae = load_diffusers_model(
-            pretrained_model_name_or_path, v2=v2, weight_dtype=weight_dtype
+            pretrained_model_name_or_path, v2=v2, weight_dtype=weight_dtype, weight_quantize_dtype=weight_quantize_dtype
         )
 
     if scheduler_name:
@@ -277,6 +279,7 @@ def load_models(
 def load_diffusers_model_xl(
     pretrained_model_name_or_path: str,
     weight_dtype: torch.dtype = torch.float32,
+    weight_quantize_dtype: torch.dtype = torch.float32,
 ) -> Tuple[List[CLIPTokenizer], List[SDXL_TEXT_ENCODER_TYPE], UNet2DConditionModel,]:
     # returns tokenizer, tokenizer_2, text_encoder, text_encoder_2, unet
 
@@ -316,7 +319,7 @@ def load_diffusers_model_xl(
         subfolder="unet",
         torch_dtype=weight_dtype,
         cache_dir=DIFFUSERS_CACHE_DIR,
-    )
+    ).to(weight_quantize_dtype)
     #vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
     vae = AutoencoderKL.from_pretrained(
             "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
@@ -327,6 +330,7 @@ def load_diffusers_model_xl(
 def load_checkpoint_model_xl(
     checkpoint_path: str,
     weight_dtype: torch.dtype = torch.float32,
+    weight_quantize_dtype: torch.dtype = torch.float32,
 ) -> Tuple[List[CLIPTokenizer], List[SDXL_TEXT_ENCODER_TYPE], UNet2DConditionModel,]:
     pipe = StableDiffusionXLPipeline.from_single_file(
         checkpoint_path,
@@ -334,7 +338,7 @@ def load_checkpoint_model_xl(
         cache_dir=DIFFUSERS_CACHE_DIR,
     )
 
-    unet = pipe.unet
+    unet = pipe.unet.to(weight_quantize_dtype)
     vae = AutoencoderKL.from_pretrained(
             "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
     )
@@ -352,6 +356,7 @@ def load_models_xl(
     pretrained_model_name_or_path: str,
     scheduler_name: str,
     weight_dtype: torch.dtype = torch.float32,
+    weight_quantize_dtype: torch.dtype = torch.float32,
     noise_scheduler_kwargs=None,
 ) -> Tuple[
     List[CLIPTokenizer],
@@ -363,11 +368,11 @@ def load_models_xl(
         ".ckpt"
     ) or pretrained_model_name_or_path.endswith(".safetensors"):
         (tokenizers, text_encoders, unet, vae) = load_checkpoint_model_xl(
-            pretrained_model_name_or_path, weight_dtype
+            pretrained_model_name_or_path, weight_dtype,weight_quantize_dtype=weight_quantize_dtype
         )
     else:  # diffusers
         (tokenizers, text_encoders, unet, vae) = load_diffusers_model_xl(
-            pretrained_model_name_or_path, weight_dtype
+            pretrained_model_name_or_path, weight_dtype,weight_quantize_dtype=weight_quantize_dtype
         )
     if scheduler_name:
         scheduler = create_noise_scheduler(scheduler_name, noise_scheduler_kwargs)

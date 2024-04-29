@@ -1,6 +1,7 @@
-from http.client import MULTIPLE_CHOICES
 import sys
-from unittest import defaultTestLoader
+
+from diffusers.models.unet_2d_condition import UNet2DConditionModel
+
 sys.path.append("./")
 
 from typing import Tuple
@@ -15,7 +16,6 @@ import random
 import numpy as np
 import argparse
 
-import PIL
 from PIL import Image
 
 import diffusers
@@ -25,8 +25,8 @@ from diffusers import AutoencoderKL
 from huggingface_hub import hf_hub_download
 
 from insightface.app import FaceAnalysis
-
 from style_template import styles
+from pipelines.pipeline_common import quantize_4bit
 from pipelines.pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
 from model_util import load_models_xl, get_torch_device
 from controlnet_util import load_controlnet, load_depth_estimator as load_depth, get_depth_map, get_depth_anything_map, get_canny_image
@@ -35,7 +35,6 @@ from common.util import clean_memory
 import gradio as gr
 
 parser = argparse.ArgumentParser()
-
 
 parser.add_argument(
 "--pretrained_model_folder", type=str, default=None
@@ -48,15 +47,17 @@ parser.add_argument(
 )
 parser.add_argument("--lowvram", action="store_true", help="Enable CPU offload for model operations.")
 parser.add_argument("--fp16", action="store_true", help="fp16")
+parser.add_argument("--load_mode", default=None, type=str, choices=["4bit", "8bit"], help="Quantization mode for optimization memory consumption")
 parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
-
 parser.add_argument(
 "--loras_path", type=str, default=None
 )
 
 args = parser.parse_args()
+load_mode = args.load_mode
 
-torch.backends.cuda.matmul.allow_tf32 = True   
+torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.allow_tf32 = False
 
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
@@ -67,6 +68,12 @@ if(args.fp16):
    dtype = torch.float16
 
 dtype = dtype if str(device).__contains__("cuda") else torch.float32
+
+dtypeQuantize = dtype
+
+if(load_mode in ('4bit','8bit')):
+    dtypeQuantize = torch.float8_e4m3fn
+
 ENABLE_CPU_OFFLOAD = True if args.lowvram else False
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "Watercolor"
@@ -261,7 +268,9 @@ def load_model(pretrained_model_folder, model_name):
         pretrained_model_name_or_path=model_path,
         scheduler_name=None,
         weight_dtype=dtype,
+        weight_quantize_dtype=dtypeQuantize
         )
+        
         scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
         print(f"vae dtype {vae.dtype}")
         pipe = StableDiffusionXLInstantIDPipeline(            
@@ -279,6 +288,12 @@ def load_model(pretrained_model_folder, model_name):
             model_path = fr"{pretrained_model_folder}/{model_name}"
         else:
             model_path = model_name
+        
+        unet = UNet2DConditionModel.from_pretrained(
+            model_path,
+            subfolder="unet",
+            torch_dtype=dtypeQuantize,
+        )
         # Load vae
         vae = AutoencoderKL.from_pretrained(
                 "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
@@ -287,11 +302,21 @@ def load_model(pretrained_model_folder, model_name):
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
             model_path,
             vae = vae,
+            unet = unet,
             controlnet=[controlnet],
             torch_dtype=dtype,
             safety_checker=None,
             feature_extractor=None,
-        )       
+        )
+        
+    if load_mode == '4bit':
+        quantize_4bit(pipe.unet)
+        #quantize_4bit(pipe.controlnet)
+        if pipe.text_encoder is not None:
+            quantize_4bit(pipe.text_encoder)
+        if pipe.text_encoder_2 is not None:
+            quantize_4bit(pipe.text_encoder_2)     
+
     return pipe
 	
 def refresh_model_names():
@@ -309,17 +334,22 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
         pipe.enable_model_cpu_offload()        
     else:
         pipe.to(device)
+
     clean_memory()  
+    
+    #if load_mode != '4bit' :
     pipe.enable_xformers_memory_efficient_attention()
+
     pipe.enable_vae_slicing()
     pipe.enable_vae_tiling() 
 
 def set_ip_adapter(adapter_strength_ratio):    
-    pipe.load_ip_adapter_instantid(face_adapter)    
+    pipe.load_ip_adapter_instantid(face_adapter)   
+    #if pipe.image_proj_model != None and  load_mode == '4bit':
+    #    quantize_4bit(pipe.image_proj_model)
+
     pipe.set_ip_adapter_scale(adapter_strength_ratio)
-    
-
-
+ 
 def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
      
     # load and disable LCM
@@ -339,8 +369,6 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
         scheduler = getattr(diffusers, scheduler_class_name)
         pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)  
     
-    
-
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
@@ -420,12 +448,16 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         print("Model loaded successfully.")
 
     def restart_cpu_offload(adapter_strength_ratio):
+        
+        #if load_mode != '4bit' :
         pipe.disable_xformers_memory_efficient_attention()
+
         set_ip_adapter(adapter_strength_ratio)            
         from pipelines.pipeline_common import optionally_disable_offloading
         optionally_disable_offloading(pipe)
         clean_memory()
         pipe.enable_model_cpu_offload()
+        #if load_mode != '4bit' :
         pipe.enable_xformers_memory_efficient_attention()
 
     def toggle_lcm_ui(value):
@@ -687,72 +719,75 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         print("Start inference...")
         print(f"[Debug] Prompt: {prompt}, \n[Debug] Neg Prompt: {negative_prompt}")
         
-        for i in range(num_images):
-            if num_images > 1:
-                seed = random.randint(0, MAX_SEED)
-            
-            generator = torch.Generator(device=pipe.device).manual_seed(seed)
-            
-            iteration_start_time = time.time()
-            result_images = pipe(
-                device=pipe.device,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image_embeds=face_emb,
-                image=control_images,
-                control_mask=control_mask,
-                controlnet_conditioning_scale=control_scales,
-                num_inference_steps=num_steps,
-                guidance_scale=guidance_scale,
-                height=height_target,
-                width=width_target,                
-                generator=generator,
-                end_cfg=guidance_threshold
-            ).images
+        with torch.no_grad():        
+            with torch.cuda.amp.autocast(dtype=dtype):
+                for i in range(num_images):
+                    if num_images > 1:
+                        seed = random.randint(0, MAX_SEED)
+                    
+                    generator = torch.Generator(device=pipe.device).manual_seed(seed)
+                    
+                    iteration_start_time = time.time()
+                    result_images = pipe(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        image_embeds=face_emb,
+                        image=control_images,
+                        control_mask=control_mask,
+                        controlnet_conditioning_scale=control_scales,
+                        num_inference_steps=num_steps,
+                        guidance_scale=guidance_scale,
+                        height=height_target,
+                        width=width_target,                
+                        generator=generator,
+                        end_cfg=guidance_threshold,
+                        device=pipe.device,
+                        dtype=dtype
+                    ).images
 
-            image = result_images[0]
-            current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
-            output_path = f"outputs/{current_time}.png"
-            if not os.path.exists("outputs"):
-                os.makedirs("outputs")
-            meta = PngImagePlugin.PngInfo()
-            meta.add_text("Upload a photo of your face full path", str(face_image_path))
-            meta.add_text("Upload a photo of your face image file name", os.path.basename(face_image_path) if face_image_path else "")
-            meta.add_text("Upload a reference pose image (Optional) full path", str(pose_image_path))
-            meta.add_text("Upload a reference pose image (Optional) image file name", os.path.basename(pose_image_path) if pose_image_path else "")
-            meta.add_text("", "")
-            meta.add_text("Prompt", str(prompt))
-            meta.add_text("", "")
-            meta.add_text("Negative Prompt", str(negative_prompt))
-            meta.add_text("Enable Fast Inference with LCM", str(enable_LCM))
-            meta.add_text("Depth Estimator", str(depth_type))
-            meta.add_text("IdentityNet strength (for fidelity)", str(identitynet_strength_ratio))
-            meta.add_text("Pose strength", str(pose_strength))
-            meta.add_text("Canny strength", str(canny_strength))
-            meta.add_text("Depth strength", str(depth_strength))
-            meta.add_text("used Controlnets", ", ".join(controlnet_selection))
-            meta.add_text("Dropdown Selected Model", str(model_dropdown))
-            meta.add_text("Default Model - Used If None Selected", str(default_model))
-            meta.add_text("Full Model Path - Used If Set", str(model_input))
-            meta.add_text("Select LoRA models", ", ".join(lora_model_dropdown))
-            meta.add_text("Target Image Width", str(width_target))
-            meta.add_text("Target Image Height", str(height_target))
-            meta.add_text("Style Template", str(style_name))
-            meta.add_text("Image Adapter Strength", str(adapter_strength_ratio))
-            meta.add_text("Number Of Sample Steps", str(num_steps))
-            meta.add_text("CFG Scale", str(guidance_scale))
-            meta.add_text("CFG Threshold", str(guidance_threshold))
-            meta.add_text("Used Seed", str(seed))
-            meta.add_text("Enhance non-face region", str(enhance_face_region))
-            meta.add_text("Used Scheduler", str(scheduler))
-            image.save(output_path, "PNG", pnginfo=meta)
-            images_generated.append(image)
+                    image = result_images[0]
+                    current_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+                    output_path = f"outputs/{current_time}.png"
+                    if not os.path.exists("outputs"):
+                        os.makedirs("outputs")
+                    meta = PngImagePlugin.PngInfo()
+                    meta.add_text("Upload a photo of your face full path", str(face_image_path))
+                    meta.add_text("Upload a photo of your face image file name", os.path.basename(face_image_path) if face_image_path else "")
+                    meta.add_text("Upload a reference pose image (Optional) full path", str(pose_image_path))
+                    meta.add_text("Upload a reference pose image (Optional) image file name", os.path.basename(pose_image_path) if pose_image_path else "")
+                    meta.add_text("", "")
+                    meta.add_text("Prompt", str(prompt))
+                    meta.add_text("", "")
+                    meta.add_text("Negative Prompt", str(negative_prompt))
+                    meta.add_text("Enable Fast Inference with LCM", str(enable_LCM))
+                    meta.add_text("Depth Estimator", str(depth_type))
+                    meta.add_text("IdentityNet strength (for fidelity)", str(identitynet_strength_ratio))
+                    meta.add_text("Pose strength", str(pose_strength))
+                    meta.add_text("Canny strength", str(canny_strength))
+                    meta.add_text("Depth strength", str(depth_strength))
+                    meta.add_text("used Controlnets", ", ".join(controlnet_selection))
+                    meta.add_text("Dropdown Selected Model", str(model_dropdown))
+                    meta.add_text("Default Model - Used If None Selected", str(default_model))
+                    meta.add_text("Full Model Path - Used If Set", str(model_input))
+                    meta.add_text("Select LoRA models", ", ".join(lora_model_dropdown))
+                    meta.add_text("Target Image Width", str(width_target))
+                    meta.add_text("Target Image Height", str(height_target))
+                    meta.add_text("Style Template", str(style_name))
+                    meta.add_text("Image Adapter Strength", str(adapter_strength_ratio))
+                    meta.add_text("Number Of Sample Steps", str(num_steps))
+                    meta.add_text("CFG Scale", str(guidance_scale))
+                    meta.add_text("CFG Threshold", str(guidance_threshold))
+                    meta.add_text("Used Seed", str(seed))
+                    meta.add_text("Enhance non-face region", str(enhance_face_region))
+                    meta.add_text("Used Scheduler", str(scheduler))
+                    image.save(output_path, "PNG", pnginfo=meta)
+                    images_generated.append(image)
 
-            iteration_end_time = time.time()
-            iteration_time = iteration_end_time - iteration_start_time
-            print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
-            if num_images > 1 and  ENABLE_CPU_OFFLOAD:                 
-                restart_cpu_offload(adapter_strength_ratio)
+                    iteration_end_time = time.time()
+                    iteration_time = iteration_end_time - iteration_start_time
+                    print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
+                    if num_images > 1 and  ENABLE_CPU_OFFLOAD:                 
+                        restart_cpu_offload(adapter_strength_ratio)
             
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0

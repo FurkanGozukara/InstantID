@@ -421,6 +421,7 @@ class IPAttnProcessor2_0(torch.nn.Module):
         # region control
         if len(region_control.prompt_image_conditioning) == 1:
             region_mask = region_control.prompt_image_conditioning[0].get('region_mask', None)
+            region_mask = region_mask.to(query.device).to(query.dtype)
             if region_mask is not None:
                 query = query.reshape([-1, query.shape[-2], query.shape[-1]])
                 h, w = region_mask.shape[:2]
