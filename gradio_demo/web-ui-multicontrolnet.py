@@ -54,6 +54,7 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
 load_mode = args.load_mode
 
 torch.backends.cudnn.allow_tf32 = False
@@ -63,9 +64,7 @@ torch.backends.cuda.allow_tf32 = False
 MAX_SEED = np.iinfo(np.int32).max
 device = get_torch_device()
 
-dtype = torch.bfloat16
-if(args.fp16):
-   dtype = torch.float16
+dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 dtype = dtype if str(device).__contains__("cuda") else torch.float32
 
@@ -121,10 +120,10 @@ def set_metadata_settings(image_path):
         pose_strength = float(metadata.get("Pose strength", "0.40"))
         canny_strength = float(metadata.get("Canny strength", "0.40"))
         depth_strength = float(metadata.get("Depth strength", "0.40"))
-        controlnet_selection = metadata.get("used Controlnets", "").split(", ")
+        controlnet_selection = metadata.get("used Controlnets", "").split(", ") if len(metadata.get("used Controlnets", "")) > 1 else []
         model_dropdown = metadata.get("Dropdown Selected Model", None)
         model_input = metadata.get("Full Model Path - Used If Set", "")
-        lora_model_dropdown = metadata.get("Select LoRA models", "").split(", ")
+        lora_model_dropdown = metadata.get("Select LoRA models", "").split(", ") if len(metadata.get("Select LoRA models", "")) > 1 else []
         width_target = int(metadata.get("Target Image Width", "1280"))
         height_target = int(metadata.get("Target Image Height", "1280"))
         style_name = metadata.get("Style Template", DEFAULT_STYLE_NAME)
@@ -659,6 +658,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         if prompt is None:
             prompt = "a person"
 
+        org_prompt = prompt
+        org_negative = negative_prompt
         prompt, negative_prompt = apply_style(style_name, prompt, negative_prompt)
 
         face_image = load_image(face_image_path)
@@ -673,10 +674,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 f"Unable to detect a face in the image. Please upload a different photo with a clear face."
             )
 
-        face_info = sorted(
-            face_info,
-            key=lambda x: (x["bbox"][2] - x["bbox"][0]) * x["bbox"][3] - x["bbox"][1],
-        )[-1]
+        face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*(x['bbox'][3]-x['bbox'][1]))[-1] # only use the maximum face
         face_emb = face_info["embedding"]
         face_kps = draw_kps(convert_from_cv2_to_image(face_image_cv2), face_info["kps"])
         img_controlnet = face_image
@@ -756,9 +754,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     meta.add_text("Upload a reference pose image (Optional) full path", str(pose_image_path))
                     meta.add_text("Upload a reference pose image (Optional) image file name", os.path.basename(pose_image_path) if pose_image_path else "")
                     meta.add_text("", "")
-                    meta.add_text("Prompt", str(prompt))
+                    meta.add_text("Prompt", str(org_prompt))
+                    meta.add_text("Final Prompt (Includes Style)", str(prompt))
                     meta.add_text("", "")
-                    meta.add_text("Negative Prompt", str(negative_prompt))
+                    meta.add_text("Negative Prompt", str(org_negative))
+                    meta.add_text("Final Negative Prompt (Includes Style)", str(negative_prompt))
                     meta.add_text("Enable Fast Inference with LCM", str(enable_LCM))
                     meta.add_text("Depth Estimator", str(depth_type))
                     meta.add_text("IdentityNet strength (for fidelity)", str(identitynet_strength_ratio))
@@ -849,7 +849,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V12"):
+        with gr.Tab("InstantId - V13"):
             gr.Markdown(title)
             gr.Markdown(description)
             
