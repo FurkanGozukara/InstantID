@@ -28,6 +28,7 @@ from diffusers.image_processor import PipelineImageInput
 from diffusers.models import ControlNetModel
 
 from diffusers.utils import (
+    USE_PEFT_BACKEND,
     deprecate,
     logging,
     replace_example_docstring,
@@ -49,7 +50,7 @@ else:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-
+USE_PEFT_BACKEND = True
 EXAMPLE_DOC_STRING = """
     Examples:
         ```py

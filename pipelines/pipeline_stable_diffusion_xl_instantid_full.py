@@ -27,6 +27,7 @@ from diffusers.image_processor import PipelineImageInput
 from diffusers.models import ControlNetModel
 
 from diffusers.utils import (
+    USE_PEFT_BACKEND,
     deprecate,
     logging,
     replace_example_docstring,
@@ -49,7 +50,7 @@ from ip_adapter.attention_processor import region_control
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-
+USE_PEFT_BACKEND = True
 EXAMPLE_DOC_STRING = """
     Examples:
         ```py
@@ -529,7 +530,7 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
  
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
-    def cuda(self, dtype=torch.float16, use_xformers=True):
+    def cuda(self, dtype=torch.float16, use_xformers=False):
         self.to('cuda', dtype)
         
         if hasattr(self, 'image_proj_model'):
@@ -642,8 +643,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-        self,
-        device: Optional[torch.device] = None,
+        self,        
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
@@ -682,10 +682,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         guidance_rescale: float = 0.7,
         # IP adapter
         ip_adapter_scale=None,
-
         # Enhance Face Region
         control_mask = None,
-
+        dtype: torch.dtype = torch.float32,
+        device: torch.device = torch.device('cuda'),
         **kwargs,
     ):
         r"""
@@ -888,8 +888,6 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
 
-       
-
         if isinstance(controlnet, MultiControlNetModel) and isinstance(controlnet_conditioning_scale, float):
             controlnet_conditioning_scale = [controlnet_conditioning_scale] * len(controlnet.nets)
 
@@ -922,7 +920,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_image_emb = self._encode_prompt_image_emb(image_embeds, 
                                                          _device,
                                                          num_images_per_prompt,
-                                                         self.unet.dtype,
+                                                         dtype,
                                                          do_classifier_free_guidance)
        
         # 4. Prepare image
@@ -966,7 +964,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         if control_mask is not None:
             mask_weight_image = control_mask
             mask_weight_image = np.array(mask_weight_image)
-            mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=_device, dtype=prompt_embeds.dtype)
+            mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=_device, dtype=dtype)
             mask_weight_image_tensor = mask_weight_image_tensor[:, :, 0] / 255.
             mask_weight_image_tensor = mask_weight_image_tensor[None, None]
             h, w = mask_weight_image_tensor.shape[-2:]
@@ -975,7 +973,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 scale_mask_weight_image_tensor = F.interpolate(
                     mask_weight_image_tensor,(h // scale, w // scale), mode='bilinear')
                 control_mask_wight_image_list.append(scale_mask_weight_image_tensor)
-            region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=self.unet.dtype) / 255.
+            region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=dtype) / 255.
             region_control.prompt_image_conditioning = [dict(region_mask=region_mask)]
         else:
             control_mask_wight_image_list = None
@@ -993,7 +991,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             num_channels_latents,
             height,
             width,
-            prompt_embeds.dtype,
+            dtype,
             _device,
             generator,
             latents,
@@ -1036,7 +1034,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             original_size,
             crops_coords_top_left,
             target_size,
-            dtype=prompt_embeds.dtype,
+            dtype=dtype,
             text_encoder_projection_dim=text_encoder_projection_dim,
         )
 
@@ -1045,7 +1043,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 negative_original_size,
                 negative_crops_coords_top_left,
                 negative_target_size,
-                dtype=prompt_embeds.dtype,
+                dtype=dtype,
                 text_encoder_projection_dim=text_encoder_projection_dim,
             )
         else:
@@ -1075,151 +1073,152 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             self._all_hooks[1].remove()        
         
         clean_memory()
-        
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                # Relevant thread:
-                # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
-                if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
-                    torch._inductor.cudagraph_mark_step_begin()
+        with torch.cuda.amp.autocast(dtype=dtype, enabled=True):
+            with self.progress_bar(total=num_inference_steps) as progress_bar:
+                for i, t in enumerate(timesteps):
+                    t.to(dtype)
+                    # Relevant thread:
+                    # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
+                    if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
+                        torch._inductor.cudagraph_mark_step_begin()
 
-                # end_cfg is the fraction of the total number of inference steps at which we stop using classifier free guidance
-                if end_cfg is not None and i / num_inference_steps > end_cfg and do_classifier_free_guidance:
-                    do_classifier_free_guidance = False            
+                    # end_cfg is the fraction of the total number of inference steps at which we stop using classifier free guidance
+                    if end_cfg is not None and i / num_inference_steps > end_cfg and do_classifier_free_guidance:
+                        do_classifier_free_guidance = False            
 
-                # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                    # expand the latents if we are doing classifier free guidance
+                    latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                    latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                    added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
 
-                # controlnet(s) inference
-                if guess_mode and do_classifier_free_guidance:
-                    # Infer ControlNet only for the conditional batch.
-                    control_model_input = latents
-                    control_model_input = self.scheduler.scale_model_input(control_model_input, t)
-                    controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
-                    controlnet_added_cond_kwargs = {
-                        "text_embeds": add_text_embeds.chunk(2)[1],
-                        "time_ids": add_time_ids.chunk(2)[1],
-                    }
-                else:
-                    control_model_input = latent_model_input
-                    controlnet_prompt_embeds = prompt_embeds
-                    controlnet_added_cond_kwargs = added_cond_kwargs
-                
-                if isinstance(controlnet_keep[i], list):
-                    cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
-                else:
-                    controlnet_cond_scale = controlnet_conditioning_scale
-                    if isinstance(controlnet_cond_scale, list):
-                        controlnet_cond_scale = controlnet_cond_scale[0]
-                    cond_scale = controlnet_cond_scale * controlnet_keep[i]
+                    # controlnet(s) inference
+                    if guess_mode and do_classifier_free_guidance:
+                        # Infer ControlNet only for the conditional batch.
+                        control_model_input = latents
+                        control_model_input = self.scheduler.scale_model_input(control_model_input, t)
+                        controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
+                        controlnet_added_cond_kwargs = {
+                            "text_embeds": add_text_embeds.chunk(2)[1],
+                            "time_ids": add_time_ids.chunk(2)[1],
+                        }
+                    else:
+                        control_model_input = latent_model_input
+                        controlnet_prompt_embeds = prompt_embeds
+                        controlnet_added_cond_kwargs = added_cond_kwargs
+                    
+                    if isinstance(controlnet_keep[i], list):
+                        cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
+                    else:
+                        controlnet_cond_scale = controlnet_conditioning_scale
+                        if isinstance(controlnet_cond_scale, list):
+                            controlnet_cond_scale = controlnet_cond_scale[0]
+                        cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                if isinstance(self.controlnet, MultiControlNetModel):
-                    down_block_res_samples_list, mid_block_res_sample_list = [], []
-                    for control_index in range(len(self.controlnet.nets)):
-                        controlnet = self.controlnet.nets[control_index].to(_device)                        
-                        if control_index == 0:
-                            # assume fhe first controlnet is IdentityNet
-                            controlnet_prompt_embeds = prompt_image_emb
-                        else:
-                            controlnet_prompt_embeds = prompt_embeds
-                        down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
-                                                                                  t,
-                                                                                  encoder_hidden_states=controlnet_prompt_embeds,
-                                                                                  controlnet_cond=image[control_index],
-                                                                                  conditioning_scale=cond_scale[control_index],
-                                                                                  guess_mode=guess_mode,
-                                                                                  added_cond_kwargs=controlnet_added_cond_kwargs,
-                                                                                  return_dict=False)
+                    if isinstance(self.controlnet, MultiControlNetModel):
+                        down_block_res_samples_list, mid_block_res_sample_list = [], []
+                        for control_index in range(len(self.controlnet.nets)):
+                            controlnet = self.controlnet.nets[control_index].to(_device)                        
+                            if control_index == 0:
+                                # assume fhe first controlnet is IdentityNet
+                                controlnet_prompt_embeds = prompt_image_emb
+                            else:
+                                controlnet_prompt_embeds = prompt_embeds
+                            down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
+                                                                                    t,
+                                                                                    encoder_hidden_states=controlnet_prompt_embeds,
+                                                                                    controlnet_cond=image[control_index],
+                                                                                    conditioning_scale=cond_scale[control_index],
+                                                                                    guess_mode=guess_mode,
+                                                                                    added_cond_kwargs=controlnet_added_cond_kwargs,
+                                                                                    return_dict=False)
+
+                            # controlnet mask
+                            if control_index == 0 and control_mask_wight_image_list is not None:
+                                down_block_res_samples = [
+                                    down_block_res_sample * mask_weight
+                                    for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_list)
+                                ]
+                                mid_block_res_sample *= control_mask_wight_image_list[-1]
+
+                            down_block_res_samples_list.append(down_block_res_samples)
+                            mid_block_res_sample_list.append(mid_block_res_sample)
+                            del controlnet
+                            clean_memory()
+
+                        mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
+                        down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
+                                                zip(*down_block_res_samples_list)]
+                        
+                    else:
+                        self.controlnet.to(_device)
+                        down_block_res_samples, mid_block_res_sample = self.controlnet(
+                            control_model_input,
+                            t,
+                            encoder_hidden_states=prompt_image_emb,
+                            controlnet_cond=image,
+                            conditioning_scale=cond_scale,
+                            guess_mode=guess_mode,
+                            added_cond_kwargs=controlnet_added_cond_kwargs,
+                            return_dict=False,
+                        )
 
                         # controlnet mask
-                        if control_index == 0 and control_mask_wight_image_list is not None:
+                        if control_mask_wight_image_list is not None:
                             down_block_res_samples = [
                                 down_block_res_sample * mask_weight
                                 for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_list)
                             ]
                             mid_block_res_sample *= control_mask_wight_image_list[-1]
 
-                        down_block_res_samples_list.append(down_block_res_samples)
-                        mid_block_res_sample_list.append(mid_block_res_sample)
-                        del controlnet
-                        clean_memory()
+                    if guess_mode and do_classifier_free_guidance:
+                        # Infered ControlNet only for the conditional batch.
+                        # To apply the output of ControlNet to both the unconditional and conditional batches,
+                        # add 0 to the unconditional batch to keep it unchanged.
+                        down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
+                        mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
-                    mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
-                    down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
-                                              zip(*down_block_res_samples_list)]
-                    
-                else:
-                    self.controlnet.to(_device)
-                    down_block_res_samples, mid_block_res_sample = self.controlnet(
-                        control_model_input,
+                    # predict the noise residual
+                    noise_pred = self.unet(
+                        latent_model_input,
                         t,
-                        encoder_hidden_states=prompt_image_emb,
-                        controlnet_cond=image,
-                        conditioning_scale=cond_scale,
-                        guess_mode=guess_mode,
-                        added_cond_kwargs=controlnet_added_cond_kwargs,
+                        encoder_hidden_states=encoder_hidden_states,
+                        timestep_cond=timestep_cond,
+                        cross_attention_kwargs=self.cross_attention_kwargs,
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_sample,
+                        added_cond_kwargs=added_cond_kwargs,
                         return_dict=False,
-                    )
+                    )[0]
 
-                    # controlnet mask
-                    if control_mask_wight_image_list is not None:
-                        down_block_res_samples = [
-                            down_block_res_sample * mask_weight
-                            for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_list)
-                        ]
-                        mid_block_res_sample *= control_mask_wight_image_list[-1]
+                    # perform guidance
+                    if do_classifier_free_guidance:
+                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                if guess_mode and do_classifier_free_guidance:
-                    # Infered ControlNet only for the conditional batch.
-                    # To apply the output of ControlNet to both the unconditional and conditional batches,
-                    # add 0 to the unconditional batch to keep it unchanged.
-                    down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-                    mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+                    if do_classifier_free_guidance and guidance_rescale > 0.0:
+                        # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                        noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
-                # predict the noise residual
-                noise_pred = self.unet(
-                    latent_model_input,
-                    t,
-                    encoder_hidden_states=encoder_hidden_states,
-                    timestep_cond=timestep_cond,
-                    cross_attention_kwargs=self.cross_attention_kwargs,
-                    down_block_additional_residuals=down_block_res_samples,
-                    mid_block_additional_residual=mid_block_res_sample,
-                    added_cond_kwargs=added_cond_kwargs,
-                    return_dict=False,
-                )[0]
+                    # compute the previous noisy sample x_t -> x_t-1
+                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
-                # perform guidance
-                if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    if callback_on_step_end is not None:
+                        callback_kwargs = {}
+                        for k in callback_on_step_end_tensor_inputs:
+                            callback_kwargs[k] = locals()[k]
+                        callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
 
-                if do_classifier_free_guidance and guidance_rescale > 0.0:
-                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+                        latents = callback_outputs.pop("latents", latents)
+                        prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
+                        negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:
-                        step_idx = i // getattr(self.scheduler, "order", 1)
-                        callback(step_idx, t, latents)
+                    # call the callback, if provided
+                    if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                        progress_bar.update()
+                        if callback is not None and i % callback_steps == 0:
+                            step_idx = i // getattr(self.scheduler, "order", 1)
+                            callback(step_idx, t, latents)
         
         #offload unet and multicontrolnet to safe memory for vae
         if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and device.type=='cpu':
