@@ -133,6 +133,7 @@ def set_metadata_settings(image_path):
         seed = int(metadata.get("Used Seed", "42"))
         enhance_face_region = metadata.get("Enhance non-face region", "True") == "True"
         scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
+        
 
     updates = [gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)]
 
@@ -146,7 +147,8 @@ def set_metadata_settings(image_path):
         updates.append(gr.update(value=pose_file))
     else:
         updates.append(gr.update())  # Do not update if the path is empty
-
+    lora_scale = float(metadata.get("LoRA Scale", "1.0"))
+    updates.append(gr.update(value=lora_scale))
     return tuple(updates)
 
 
@@ -375,7 +377,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     global used_lora_path
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown,lora_scale_variable):
         global pipe  # Declare pipe as a global variable thas_cpu_offload manage it when the model changes
         global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status
      
@@ -443,7 +445,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             lora_path = os.path.join(used_lora_path, lora_model)
             print(f"lora_path {lora_path}")
             pipe.load_lora_weights(lora_path)
-
+            
+        pipe.fuse_lora(lora_scale=lora_scale_variable)
         print("Model loaded successfully.")
 
     def restart_cpu_offload(adapter_strength_ratio):
@@ -646,6 +649,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         guidance_threshold,
         depth_type,
         lora_model_dropdown,
+        lora_scale,
         progress=gr.Progress(track_tqdm=True),
     ):
         global controlnet_map, controlnet_map_fn
@@ -705,7 +709,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type,lora_model_dropdown)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type,lora_model_dropdown,lora_scale)        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
@@ -764,6 +768,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     meta.add_text("IdentityNet strength (for fidelity)", str(identitynet_strength_ratio))
                     meta.add_text("Pose strength", str(pose_strength))
                     meta.add_text("Canny strength", str(canny_strength))
+                    meta.add_text("LoRA Scale", str(lora_scale))
                     meta.add_text("Depth strength", str(depth_strength))
                     meta.add_text("used Controlnets", ", ".join(controlnet_selection))
                     meta.add_text("Dropdown Selected Model", str(model_dropdown))
@@ -849,7 +854,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V13"):
+        with gr.Tab("InstantId - V14"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -897,6 +902,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             refresh_models = gr.Button("Refresh Models (Only SDXL Works)")
                             lora_model_names = get_lora_model_names()
                             lora_model_dropdown = gr.Dropdown(label="Select LoRA models",multiselect=True, choices=lora_model_names, value=[])
+                            lora_scale = gr.Slider(label="Change applied LoRA Scale",
+                        minimum=0.0,
+                        maximum=10.0,
+                        step=0.05,
+                        value=1.0,
+                    )
                         with gr.Column():
                             model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
                             btn_open_outputs = gr.Button("Open Outputs Folder")
@@ -1065,7 +1076,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         scheduler,
                         enable_LCM,                    
                         enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type,
-                        lora_model_dropdown
+                        lora_model_dropdown,
+                        lora_scale
                     ],
                     outputs=[gallery, usage_tips],
                 )
@@ -1084,7 +1096,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 metadata_image_input = gr.Image(type="filepath", label="Upload Image")                
                 metadata_output = gr.Textbox(label="Image Metadata", lines=25, max_lines=50)
             metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
-        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file])
+        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale])
 
         gr.Markdown(article)
     demo.launch(inbrowser=True, share=share)
