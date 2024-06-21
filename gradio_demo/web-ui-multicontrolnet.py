@@ -831,7 +831,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     """
 
     description = r"""
-    <b>Official 🤗 Gradio demo</b> for <a href='https://github.com/InstantID/InstantID' target='_blank'><b>InstantID: Zero-shot Identity-Preserving Generation in Seconds</b></a>.<br>
+    <b>Only available to Premium Members and latest version : https://www.patreon.com/posts/1-click-very-gui-97769887<br>
 
     How to use:<br>
     1. Upload an image with a face. For images with multiple faces, we will only detect the largest face. Ensure the face is not too small and is clearly visible without significant obstructions or blurring.
