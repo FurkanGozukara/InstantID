@@ -46,7 +46,6 @@ parser.add_argument(
 "--enable_LCM", type=bool, default=os.environ.get("ENABLE_LCM", False)
 )
 parser.add_argument("--lowvram", action="store_true", help="Enable CPU offload for model operations.")
-parser.add_argument("--fp16", action="store_true", help="fp16")
 parser.add_argument("--load_mode", default=None, type=str, choices=["4bit", "8bit"], help="Quantization mode for optimization memory consumption")
 parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
 parser.add_argument(
@@ -110,8 +109,8 @@ def set_metadata_settings(image_path):
 
         # Extract and set the relevant metadata settings
         prompt = metadata.get("Prompt", "")
-        face_file = metadata.get("Upload a photo of your face full path", "")
-        pose_file = metadata.get("Upload a reference pose image (Optional) full path", "")
+        face_file = image_path #metadata.get("Upload a photo of your face full path", "")
+        pose_file = "" #metadata.get("Upload a reference pose image (Optional) full path", "")
         negative_prompt = metadata.get("Negative Prompt", "")
         enable_LCM = metadata.get("Enable Fast Inference with LCM", "False") == "True"
         depth_type = metadata.get("Depth Estimator", "LiheYoung/depth_anything")

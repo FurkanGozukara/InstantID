@@ -530,11 +530,11 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
  
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
-    def cuda(self, dtype=torch.float16, use_xformers=False):
+    def cuda(self, dtype=torch.float16, use_xformers=True):
         self.to('cuda', dtype)
         
         if hasattr(self, 'image_proj_model'):
-            self.image_proj_model.to(self.unet.device).to(self.unet.dtype)
+            self.image_proj_model.to(self.unet.device).to(self.dtype)
         
         if use_xformers:
             if is_xformers_available():
@@ -973,7 +973,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 scale_mask_weight_image_tensor = F.interpolate(
                     mask_weight_image_tensor,(h // scale, w // scale), mode='bilinear')
                 control_mask_wight_image_list.append(scale_mask_weight_image_tensor)
-            region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=dtype) / 255.
+            region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(device=_device, dtype=dtype) / 255.
             region_control.prompt_image_conditioning = [dict(region_mask=region_mask)]
         else:
             control_mask_wight_image_list = None
@@ -1076,7 +1076,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         with torch.cuda.amp.autocast(dtype=dtype, enabled=True):
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
-                    t.to(dtype)
+                    #t.to(dtype)
                     # Relevant thread:
                     # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
                     if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
