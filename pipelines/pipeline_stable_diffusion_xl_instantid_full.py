@@ -20,6 +20,7 @@ import math
 import numpy as np
 import PIL.Image
 import torch
+import time
 import torch.nn.functional as F
 from common.util import clean_memory
 from diffusers.image_processor import PipelineImageInput
@@ -1074,11 +1075,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         
         clean_memory()
         with torch.cuda.amp.autocast(dtype=dtype, enabled=True):
-            with self.progress_bar(total=num_inference_steps) as progress_bar:
+            with self.progress_bar(total=num_inference_steps) as progress_bar:             
                 for i, t in enumerate(timesteps):
+                    step_start = time.time()
                     t.to(dtype)
-                    percent = (i + 1) / num_inference_steps * 100
-                    print(f"\rStep {i+1}/{num_inference_steps} ({percent:.2f}%)", end="", flush=True)
                     # Relevant thread:
                     # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
                     if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
@@ -1221,6 +1221,9 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         if callback is not None and i % callback_steps == 0:
                             step_idx = i // getattr(self.scheduler, "order", 1)
                             callback(step_idx, t, latents)
+                    percent = (i + 1) / num_inference_steps * 100
+                    step_duration = (time.time() - step_start) * 1000  # Convert to milliseconds
+                    print(f"\rStep {i+1}/{num_inference_steps} ({percent:.2f}%) - {step_duration:.0f} ms", end="", flush=True)
         
         #offload unet and multicontrolnet to safe memory for vae
         if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and device.type=='cpu':
@@ -1230,7 +1233,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             self._all_hooks[4].remove()
       
         clean_memory()
-        
+        print("")
         if not output_type == "latent":
             #  # make sure the VAE is in float32 mode, as it overflows in float16
             # needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
