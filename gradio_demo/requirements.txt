@@ -7,7 +7,7 @@ onnxruntime-gpu
 spaces==0.19.4
 omegaconf
 peft
-huggingface-hub==0.20.2
+huggingface-hub
 opencv-python
 insightface
 gradio
