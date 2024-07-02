@@ -1077,6 +1077,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
                     t.to(dtype)
+                    percent = (i + 1) / num_inference_steps * 100
+                    print(f"\rStep {i+1}/{num_inference_steps} ({percent:.2f}%)", end="", flush=True)
                     # Relevant thread:
                     # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
                     if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
