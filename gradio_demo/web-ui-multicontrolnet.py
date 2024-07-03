@@ -1288,7 +1288,6 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     fn=toggle_lcm_ui,
                     inputs=[enable_LCM],
                     outputs=[num_steps, guidance_scale],
-                    queue=False,
                 )
         with gr.Tab("Image Metadata"):
 
