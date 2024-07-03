@@ -43,10 +43,10 @@ PREDEFINED_MODELS = {
     "Juggernaut-XL v9": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
     "Animagine XL v3.1":"https://civitai.com/api/download/models/403131?type=Model&format=SafeTensor&size=full&fp=fp16",
     "DynaVision XL v0.6":"https://civitai.com/api/download/models/297740",
-    "epiCRealism XL v7": "https://civitai.com/api/download/models/489217",
+    "EpiCRealism XL v7": "https://civitai.com/api/download/models/489217",
     "RealCartoon-XL v6":"https://civitai.com/api/download/models/254091?type=Model&format=SafeTensor&size=pruned&fp=fp16",
     "AAM XL Anime Mix v1":"https://civitai.com/api/download/models/303526",
-    "anima_pencil-XL v5" : "https://civitai.com/api/download/models/597138",
+    "Anima_pencil-XL v5" : "https://civitai.com/api/download/models/597138",
     "HimawariMix XL v13": "https://civitai.com/api/download/models/558064",
     "Jib Mix Realistic XL v13": "https://civitai.com/api/download/models/610292",
     "SDXL Yamers Anime Stage Anima":"https://civitai.com/api/download/models/377674",
@@ -62,6 +62,12 @@ PREDEFINED_MODELS = {
 
 
 }
+
+def update_ip_adapter_scale(adapter_strength_ratio):
+    global pipe
+    if pipe is not None:
+        pipe.set_ip_adapter_scale(adapter_strength_ratio)
+        print(f"Updated IP adapter scale to {adapter_strength_ratio}")
 
 
 def download_all_predefined_models():
@@ -305,24 +311,23 @@ def open_folder():
 def get_lora_model_names():
     global used_lora_path
     if args.loras_path:
-        if os.path.exists:
-            used_lora_path=args.loras_path
+        if os.path.exists(args.loras_path):
+            used_lora_path = args.loras_path
     if not os.path.exists(used_lora_path):
         os.makedirs(used_lora_path)
-    lora_files = []
-    lora_files = lora_files + [f for f in os.listdir(used_lora_path) if f.endswith('.safetensors')]
+    lora_files = sorted([f for f in os.listdir(used_lora_path) if f.endswith('.safetensors')])
     return lora_files
 
 def get_model_names():
     global used_model_path
     if args.models_path:
-        if os.path.exists:
-            used_model_path=args.models_path
+        if os.path.exists(args.models_path):
+            used_model_path = args.models_path
     if not os.path.exists(used_model_path):
         os.makedirs(used_model_path)
-    model_files = []
-    model_files.append(default_model)
-    model_files = model_files + [f for f in os.listdir(used_model_path) if f.endswith('.safetensors')]
+    model_files = [default_model]
+    model_files += sorted([f for f in os.listdir(used_model_path) if f.endswith('.safetensors')])
+    model_files = sorted(model_files)
     return model_files
 
 def load_model(pretrained_model_folder, model_name):
@@ -426,7 +431,7 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     pipe.enable_vae_tiling() 
 
 def set_ip_adapter(adapter_strength_ratio):    
-    pipe.load_ip_adapter_instantid(face_adapter)   
+    pipe.load_ip_adapter_instantid(face_adapter,scale=adapter_strength_ratio)   
     #if pipe.image_proj_model != None and  load_mode == '4bit':
     #    quantize_4bit(pipe.image_proj_model)
 
@@ -710,6 +715,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         return p.replace("{prompt}", positive), n + " " + negative
 
     def generate_image(
+        generation_type,
         face_image_path,
         pose_image_path,
         prompt,
@@ -724,6 +730,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         controlnet_selection,
         guidance_scale,
         seed,
+        randomize_seed,
         scheduler,
         enable_LCM,        
         enhance_face_region,
@@ -739,11 +746,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         progress=gr.Progress(),
     ):
         global controlnet_map, controlnet_map_fn
-       
+   
         if face_image_path is None:
-            raise gr.Error(
-                f"Cannot find any input face image! Please upload the face image"
-            )
+            raise gr.Error(f"Cannot find any input face image! Please upload the face image")
 
         if prompt is None:
             prompt = "a person"
@@ -760,9 +765,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         face_info = app.get(face_image_cv2)
 
         if len(face_info) == 0:
-            raise gr.Error(
-                f"Unable to detect a face in the image. Please upload a different photo with a clear face."
-            )
+            raise gr.Error(f"Unable to detect a face in the image. Please upload a different photo with a clear face.")
 
         face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*(x['bbox'][3]-x['bbox'][1]))[-1] # only use the maximum face
         face_emb = face_info["embedding"]
@@ -777,9 +780,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             face_info = app.get(pose_image_cv2)
 
             if len(face_info) == 0:
-                raise gr.Error(
-                    f"Cannot find any face in the reference image! Please upload another person image"
-                )
+                raise gr.Error(f"Cannot find any face in the reference image! Please upload another person image")
 
             face_info = face_info[-1]
             face_kps = draw_kps(pose_image, face_info["kps"])
@@ -795,7 +796,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type,lora_model_dropdown,lora_scale)        
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale)      
+        set_ip_adapter(adapter_strength_ratio)
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
         output_dir = "outputs"
@@ -806,16 +808,16 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         print("Start inference...")
         print(f"[Debug] Prompt: {prompt}, \n[Debug] Neg Prompt: {negative_prompt}")
-        
+    
         with torch.no_grad():        
             with torch.cuda.amp.autocast(dtype=dtype):
                 for i in range(num_images):
                     progress(i / num_images, desc=f"Generating image {i+1}/{num_images}")
-                    if num_images > 1:
+                    if randomize_seed or num_images > 1:
                         seed = random.randint(0, MAX_SEED)
-                    
+                
                     generator = torch.Generator(device=pipe.device).manual_seed(seed)
-                    
+                
                     iteration_start_time = time.time()
                     result_images = pipe(
                         prompt=prompt,
@@ -880,12 +882,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
                     if num_images > 1 and  ENABLE_CPU_OFFLOAD:                 
                         restart_cpu_offload(adapter_strength_ratio)
-            
+        
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
         clean_memory()
         print(f"{len(images_generated)} images generated in {total_time:.2f} seconds, average {average_time_per_image:.2f} seconds per image.")
-        return images_generated, gr.update(visible=True)
+        return images_generated, gr.update(visible=True), seed
 
     def generate_all_variations(
         variation_type,
@@ -903,6 +905,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         controlnet_selection,
         guidance_scale,
         seed,
+        randomize_seed,  # Add this line
         scheduler,
         enable_LCM,        
         enhance_face_region,
@@ -918,7 +921,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         progress=gr.Progress(track_tqdm=True)
     ):
         all_images = []
-    
+
         if variation_type == "styles":
             variations = STYLE_NAMES
             total_variations = len(variations)
@@ -942,34 +945,36 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 current_style = style_name
                 current_model = variation
 
-            images, _ = generate_image(
-                face_file,
-                pose_file,
-                prompt,
-                negative_prompt,
-                current_style,
-                num_steps,
-                identitynet_strength_ratio,
-                adapter_strength_ratio,
-                pose_strength,
-                canny_strength,
-                depth_strength,
-                controlnet_selection,
-                guidance_scale,
-                seed,
-                scheduler,
-                enable_LCM,        
-                enhance_face_region,
-                model_input,
-                current_model,
-                width,
-                height,
-                num_images,
-                guidance_threshold,
-                depth_type,
-                lora_model_dropdown,
-                lora_scale,
-                progress
+            images, _, new_seed = generate_image(
+            variation_type,
+            face_file,
+            pose_file,
+            prompt,
+            negative_prompt,
+            current_style,
+            num_steps,
+            identitynet_strength_ratio,
+            adapter_strength_ratio,
+            pose_strength,
+            canny_strength,
+            depth_strength,
+            controlnet_selection,
+            guidance_scale,
+            seed,
+            randomize_seed,  # Add this line
+            scheduler,
+            enable_LCM,        
+            enhance_face_region,
+            model_input,
+            current_model,
+            width,
+            height,
+            num_images,
+            guidance_threshold,
+            depth_type,
+            lora_model_dropdown,
+            lora_scale,
+            progress
             )
             all_images.extend(images)
 
@@ -1062,9 +1067,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             label="Upload a reference pose image (Optional)",
                             type="filepath",
                         )
+                    with gr.Row(equal_height=True):
+                        progress_status = gr.Label()
                 with gr.Column(scale=1):
             
-                    gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512, format="png")
+                    gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512, format="png", preview=True, allow_preview=True)
+                    
                     usage_tips = gr.Markdown(
                         label="InstantID Usage Tips", value=tips, visible=False
                     )
@@ -1111,9 +1119,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
                     with gr.Row():
                         with gr.Column():
-                            width = gr.Number(label="Width", value=1280, visible=True)
+                            width = gr.Slider(label="Width", value=1280,step=64, visible=True,minimum=512,maximum=2048)
                         with gr.Column():
-                            height = gr.Number(label="Height", value=1280, visible=True)
+                            height = gr.Slider(label="Height", value=1280,step=64, visible=True,minimum=512,maximum=2048)
             with gr.Row():
                 with gr.Column():                
                     enable_LCM = gr.Checkbox(
@@ -1142,7 +1150,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     identitynet_strength_ratio = gr.Slider(
                         label="IdentityNet strength (for fidelity)",
                         minimum=0,
-                        maximum=1.5,
+                        maximum=3,
                         step=0.05,
                         value=0.80,
                     )
@@ -1150,7 +1158,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     adapter_strength_ratio = gr.Slider(
                         label="Image adapter strength (for detail)",
                         minimum=0,
-                        maximum=1.5,
+                        maximum=3,
                         step=0.05,
                         value=0.80,
                     )
@@ -1163,21 +1171,21 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         pose_strength = gr.Slider(
                             label="Pose strength",
                             minimum=0,
-                            maximum=1.5,
+                            maximum=3,
                             step=0.05,
                             value=0.40,
                         )
                         canny_strength = gr.Slider(
                             label="Canny strength",
                             minimum=0,
-                            maximum=1.5,
+                            maximum=3,
                             step=0.05,
                             value=0.40,
                         )
                         depth_strength = gr.Slider(
                             label="Depth strength",
                             minimum=0,
-                            maximum=1.5,
+                            maximum=3,
                             step=0.05,
                             value=0.40,
                         )
@@ -1243,15 +1251,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     outputs=[model_dropdown, lora_model_dropdown]
                 )
                 submit.click(
-                    fn=remove_tips,
-                    outputs=usage_tips,
-                ).then(
-                    fn=randomize_seed_fn,
-                    inputs=[seed, randomize_seed],
-                    outputs=seed,
-                ).then(
                     fn=generate_image,
                     inputs=[
+                        gr.Textbox(value="single", visible=False),  # Hidden input to specify single image generation
                         face_file,
                         pose_file,
                         prompt,
@@ -1266,6 +1268,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         controlnet_selection,
                         guidance_scale,
                         seed,
+                        randomize_seed,  # Add this line
                         scheduler,
                         enable_LCM,                    
                         enhance_face_region,
@@ -1279,8 +1282,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         lora_model_dropdown,
                         lora_scale
                     ],
-                    outputs=[gallery, usage_tips],
-                    show_progress=True
+                    outputs=[gallery, progress_status, seed],
                 )
 
 
@@ -1318,7 +1320,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             download_status = gr.Textbox(label="Download Status")
 
             gr.Markdown("### Pre-defined Models")
-            predefined_model = gr.Dropdown(choices=list(PREDEFINED_MODELS.keys()), label="Select Pre-defined Model")
+            predefined_model = gr.Dropdown(choices=sorted(list(PREDEFINED_MODELS.keys())), label="Select Pre-defined Model")
             download_predefined_button = gr.Button("Download Selected Model")
     
             # New button for downloading all predefined models
@@ -1346,9 +1348,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
             def refresh_lists():
                 return (
-                    "\n".join(get_model_files(used_model_path)),
-                    "\n".join(get_model_files(used_lora_path))
-                )
+                "\n".join(sorted(get_model_files(used_model_path))),
+                "\n".join(sorted(get_model_files(used_lora_path)))
+            )
 
             refresh_button.click(
                 fn=refresh_lists,
@@ -1374,6 +1376,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 controlnet_selection,
                 guidance_scale,
                 seed,
+                randomize_seed,  # Add this line
                 scheduler,
                 enable_LCM,                    
                 enhance_face_region,
@@ -1387,7 +1390,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 lora_model_dropdown,
                 lora_scale
             ],
-            outputs=[gallery, usage_tips],
+            outputs=[gallery, progress_status],
+        )
+
+        adapter_strength_ratio.change(
+            fn=update_ip_adapter_scale,
+            inputs=[adapter_strength_ratio],
         )
 
         generate_all_models_button.click(
@@ -1409,6 +1417,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 controlnet_selection,
                 guidance_scale,
                 seed,
+                randomize_seed,  # Add this line
                 scheduler,
                 enable_LCM,                    
                 enhance_face_region,
@@ -1422,7 +1431,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 lora_model_dropdown,
                 lora_scale
             ],
-            outputs=[gallery, usage_tips],
+            outputs=[gallery, progress_status],
         )
 
         gr.Markdown(article)

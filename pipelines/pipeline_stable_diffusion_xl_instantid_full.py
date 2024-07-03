@@ -1223,7 +1223,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                             callback(step_idx, t, latents)
                     percent = (i + 1) / num_inference_steps * 100
                     step_duration = (time.time() - step_start) * 1000  # Convert to milliseconds
-                    print(f"\rStep {i+1}/{num_inference_steps} ({percent:.2f}%) - {step_duration:.0f} ms", end="", flush=True)
+                    print(f"\rStep {i+1}/{num_inference_steps} ({percent:.2f}%) - {step_duration:.0f} ms ", end="", flush=True)
         
         #offload unet and multicontrolnet to safe memory for vae
         if hasattr(self, '_all_hooks') and len(self._all_hooks) > 0 and device.type=='cpu':
