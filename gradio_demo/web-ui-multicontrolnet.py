@@ -1249,8 +1249,6 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     fn=randomize_seed_fn,
                     inputs=[seed, randomize_seed],
                     outputs=seed,
-                    queue=False,
-                    api_name=False,
                 ).then(
                     fn=generate_image,
                     inputs=[
