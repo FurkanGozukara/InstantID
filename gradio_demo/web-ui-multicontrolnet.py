@@ -65,6 +65,13 @@ PREDEFINED_MODELS = {
 }
 
 
+def download_all_predefined_models():
+    status_messages = []
+    for model_name in PREDEFINED_MODELS.keys():
+        status = download_predefined_model(model_name)
+        status_messages.append(f"{model_name}: {status}")
+    return "\n".join(status_messages)
+
 
 def get_model_files(directory):
     return [f for f in os.listdir(directory) if f.endswith(('.safetensors', '.ckpt'))]
@@ -1282,48 +1289,57 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
         with gr.Tab("Model Downloader"):
             gr.Markdown("## Model Downloader")
-        
+
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Checkpoints")
                     checkpoint_files = gr.Textbox(label="Available Checkpoint Files", value="\n".join(get_model_files(used_model_path)))
-            
+        
                 with gr.Column():
                     gr.Markdown("### LoRAs")
                     lora_files = gr.Textbox(label="Available LoRA Files", value="\n".join(get_model_files(used_lora_path)))
-        
+
             with gr.Row():
                 model_url = gr.Textbox(label="Model Download URL")
                 model_name = gr.Textbox(label="Model Name (Optional)")
                 model_type = gr.Dropdown(choices=["Checkpoint", "LoRA"], value="Checkpoint", label="Model Type")
-        
+
             download_button = gr.Button("Download Model")
             download_status = gr.Textbox(label="Download Status")
-        
+
             gr.Markdown("### Pre-defined Models")
             predefined_model = gr.Dropdown(choices=list(PREDEFINED_MODELS.keys()), label="Select Pre-defined Model")
             download_predefined_button = gr.Button("Download Pre-defined Model")
-        
+    
+            # New button for downloading all predefined models
+            download_all_predefined_button = gr.Button("Download All Pre-defined Models")
+
             refresh_button = gr.Button("Refresh File Lists")
-        
+
             download_button.click(
                 fn=download_model,
                 inputs=[model_url, model_name, model_type],
                 outputs=download_status
             )
-        
+
             download_predefined_button.click(
                 fn=download_predefined_model,
                 inputs=[predefined_model],
                 outputs=download_status
             )
-        
+
+            # New click event for downloading all predefined models
+            download_all_predefined_button.click(
+                fn=download_all_predefined_models,
+                outputs=download_status
+            )
+
             def refresh_lists():
                 return (
                     "\n".join(get_model_files(used_model_path)),
                     "\n".join(get_model_files(used_lora_path))
                 )
-        
+
             refresh_button.click(
                 fn=refresh_lists,
                 outputs=[checkpoint_files, lora_files]
