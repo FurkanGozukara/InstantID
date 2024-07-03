@@ -56,8 +56,7 @@ PREDEFINED_MODELS = {
     "Pixel Art Diffusion XL Sprite Shaper":"https://civitai.com/api/download/models/364043",
     "Halcyon SDXL v1.7":"https://civitai.com/api/download/models/610541",
     "WildCardX-XL-Fusion OG":"https://civitai.com/api/download/models/345685",
-    "Raemu XL v4" : "https://civitai.com/api/download/models/613928",
-    "Pokemon Trainer Sprite PixelArt v1" : "https://civitai.com/api/download/models/443092"
+    "Raemu XL v4" : "https://civitai.com/api/download/models/613928"
 
 
 
@@ -459,10 +458,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     global used_lora_path
     _pretrained_model_folder = pretrained_model_folder
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown,lora_scale_variable):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable):
         global pipe  # Declare pipe as a global variable thas_cpu_offload manage it when the model changes
         global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status
-     
+ 
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
 
@@ -473,7 +472,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         if not model_to_load:
             print("No model selected or inputted. Default model will be used.")
             model_to_load = default_model
-       
+   
         # Reload CPU offload to fix bug for half mode
         if pipe and ENABLE_CPU_OFFLOAD:
             restart_cpu_offload(adapter_strength_ratio)
@@ -493,7 +492,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
 
-        # Reload depth estimator if neeed
+        # Reload depth estimator if needed
         if (pipe and model_to_load == last_loaded_model
             and depth_type != last_loaded_depth_estimator):          
             load_depth_estimator(pretrained_model_folder, depth_type)  
@@ -510,7 +509,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             last_LCM_status = with_LCM
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_loaded_scheduler = scheduler
-       
+   
         # Reload model if needed
         if (pipe and model_to_load != last_loaded_model):                                              
             # Reload model        
@@ -521,15 +520,20 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             last_loaded_depth_estimator = depth_type
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
-        
+    
         pipe.unload_lora_weights()
-        for lora_model in lora_model_dropdown:
-            lora_path = os.path.join(used_lora_path, lora_model)
-            print(f"lora_path {lora_path}")
-            pipe.load_lora_weights(lora_path)
-            
-        pipe.fuse_lora(lora_scale=lora_scale_variable)
-        print("Model loaded successfully.")
+        if lora_model_dropdown:  # Check if any LoRA models are selected
+            for lora_model in lora_model_dropdown:
+                lora_path = os.path.join(used_lora_path, lora_model)
+                print(f"Loading LoRA: {lora_path}")
+                pipe.load_lora_weights(lora_path)
+        
+            pipe.fuse_lora(lora_scale=lora_scale_variable)
+            print("LoRA models loaded and fused successfully.")
+        else:
+            print("No LoRA models selected. Skipping LoRA fusion.")
+
+    print("Model loaded successfully.")
 
     def restart_cpu_offload(adapter_strength_ratio):
         
@@ -732,7 +736,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         depth_type,
         lora_model_dropdown,
         lora_scale,
-        progress=gr.Progress(track_tqdm=True),
+        progress=gr.Progress(),
     ):
         global controlnet_map, controlnet_map_fn
        
@@ -806,6 +810,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         with torch.no_grad():        
             with torch.cuda.amp.autocast(dtype=dtype):
                 for i in range(num_images):
+                    progress(i / num_images, desc=f"Generating image {i+1}/{num_images}")
                     if num_images > 1:
                         seed = random.randint(0, MAX_SEED)
                     
@@ -1265,11 +1270,19 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         seed,
                         scheduler,
                         enable_LCM,                    
-                        enhance_face_region,model_input,model_dropdown,width,height,num_images,guidance_threshold,depth_type,
+                        enhance_face_region,
+                        model_input,
+                        model_dropdown,
+                        width,
+                        height,
+                        num_images,
+                        guidance_threshold,
+                        depth_type,
                         lora_model_dropdown,
                         lora_scale
                     ],
                     outputs=[gallery, usage_tips],
+                    show_progress=True
                 )
 
 
@@ -1309,7 +1322,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
             gr.Markdown("### Pre-defined Models")
             predefined_model = gr.Dropdown(choices=list(PREDEFINED_MODELS.keys()), label="Select Pre-defined Model")
-            download_predefined_button = gr.Button("Download Pre-defined Model")
+            download_predefined_button = gr.Button("Download Selected Model")
     
             # New button for downloading all predefined models
             download_all_predefined_button = gr.Button("Download All Pre-defined Models")
