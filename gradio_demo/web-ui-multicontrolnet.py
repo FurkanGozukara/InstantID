@@ -1064,7 +1064,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         )
                 with gr.Column(scale=1):
             
-                    gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512)
+                    gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512, format="png")
                     usage_tips = gr.Markdown(
                         label="InstantID Usage Tips", value=tips, visible=False
                     )
