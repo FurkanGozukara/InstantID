@@ -50,14 +50,22 @@ def download_model(url, name, model_type):
     ensure_libraries()
     
     # Remove '?download=true' from the end of the URL if present
-    url = url.split('?')[0]
+    url = url.split('?download=true')[0]
+    
+    # Append the token if the URL contains 'civitai'
+    if 'civitai' in url.lower():
+        token = "token=5577db242d28f46030f55164cdd2da5d"
+        if '?' in url:
+            url += f"&{token}"
+        else:
+            url += f"?{token}"
     
     # Determine the download path based on model type
     download_path = used_model_path if model_type == "Checkpoint" else used_lora_path
     
     # If name is not provided, use the last part of the URL as the filename
     if not name:
-        name = url.split('/')[-1]
+        name = url.split('/')[-1].split('?')[0]  # Remove query parameters from filename
     
     # Ensure the filename has the correct extension
     if not (name.endswith('.safetensors') or name.endswith('.ckpt')):
