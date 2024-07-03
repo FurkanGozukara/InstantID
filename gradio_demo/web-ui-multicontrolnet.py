@@ -90,6 +90,8 @@ def update_config_dropdown(config_list, selected_config):
 
 def load_config(config_name):
     if not config_name:
+        with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
+            f.write("")
         return [gr.update()] * 25  # Return no updates if no config is selected
     
     filename = f"{config_name}.json"
@@ -1206,15 +1208,17 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         )
                     with gr.Row(equal_height=True):
                         progress_status = gr.Label()
+                        usage_tips = gr.Markdown(
+                        label="InstantID Usage Tips", value=tips, visible=True
+                    )
                 with gr.Column(scale=1):
             
                     gallery = gr.Gallery(label="Generated Images", columns=1, rows=1, height=512, format="png", preview=True, allow_preview=True)
                     
-                    usage_tips = gr.Markdown(
-                        label="InstantID Usage Tips", value=tips, visible=False
-                    )
+
             with gr.Row():
                 with gr.Column():
+
                     # prompt
                     prompt = gr.Textbox(
                         label="Prompt",
@@ -1231,11 +1235,17 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             placeholder="low quality",
                             value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
                         )
-                    config_name = gr.Textbox(label="Configuration Name")
-                    save_config_btn = gr.Button("Save Configuration")
+                    with gr.Row():
+                        with gr.Column():
+                            config_name = gr.Textbox(label="Configuration Name")
+                        with gr.Column():
+                            save_config_btn = gr.Button("Save Configuration")
                     config_dropdown = gr.Dropdown(label="Saved Configurations", choices=get_config_list(), value=get_latest_config())
-                    load_config_btn = gr.Button("Load Configuration")
-                    refresh_config_btn = gr.Button("Refresh Configuration List")
+                    with gr.Row():
+                        with gr.Column():
+                            load_config_btn = gr.Button("Load Configuration")
+                        with gr.Column():
+                            refresh_config_btn = gr.Button("Refresh Configuration List")
 
                 with gr.Column():
                     model_names = get_model_names()
@@ -1264,15 +1274,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             width = gr.Slider(label="Width", value=1280,step=64, visible=True,minimum=512,maximum=2048)
                         with gr.Column():
                             height = gr.Slider(label="Height", value=1280,step=64, visible=True,minimum=512,maximum=2048)
-            with gr.Row():
-                with gr.Column():                
-                    enable_LCM = gr.Checkbox(
-                    label="Enable Fast Inference with LCM", value=enable_lcm_arg,
-                    info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
-                )
-                with gr.Column():
-                    num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
-        
+                    with gr.Row():
+                            num_images = gr.Number(label="How many Images to Generate", value=1, step=1, minimum=1, visible=True)
+                            style = gr.Dropdown(
+                        label="Style template",
+                        choices=STYLE_NAMES,
+                        value=DEFAULT_STYLE_NAME,
+                    )  
+
             with gr.Row():       
                 with gr.Column():       
                     depth_type = gr.Dropdown(
@@ -1280,12 +1289,13 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     choices=DEPTH_ESTIMATOR,
                     value="LiheYoung/depth_anything")
 
-                with gr.Column():       
-                    style = gr.Dropdown(
-                        label="Style template",
-                        choices=STYLE_NAMES,
-                        value=DEFAULT_STYLE_NAME,
-                    )           
+                with gr.Column():                
+                    enable_LCM = gr.Checkbox(
+                    label="Enable Fast Inference with LCM", value=enable_lcm_arg,
+                    info="LCM speeds up the inference step, the trade-off is the quality of the generated image. It performs better with portrait face images rather than distant faces",
+                )
+   
+         
             with gr.Row():         
                 with gr.Column():  
                     # strength
