@@ -7,6 +7,7 @@ from tqdm import tqdm
 from typing import Tuple
 from PIL import PngImagePlugin
 import time
+import json
 from datetime import datetime
 import os
 import cv2
@@ -15,6 +16,8 @@ import torch
 import random
 import numpy as np
 import argparse
+
+import traceback
 
 from PIL import Image
 
@@ -34,6 +37,140 @@ from common.util import clean_memory
 
 import gradio as gr
 from downloader import ensure_libraries, download_file
+
+CONFIG_DIR = "configs"
+LATEST_CONFIG_FILE = "latest_config.txt"
+
+def save_config(config_name, *args):
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR)
+    
+    config = {
+        "timestamp": datetime.now().isoformat(),
+        "prompt": args[0],
+        "negative_prompt": args[1],
+        "style": args[2],
+        "num_steps": args[3],
+        "identitynet_strength_ratio": args[4],
+        "adapter_strength_ratio": args[5],
+        "pose_strength": args[6],
+        "canny_strength": args[7],
+        "depth_strength": args[8],
+        "controlnet_selection": args[9],
+        "guidance_scale": args[10],
+        "seed": args[11],
+        "randomize_seed": args[12],
+        "scheduler": args[13],
+        "enable_LCM": args[14],
+        "enhance_face_region": args[15],
+        "model_input": args[16],
+        "model_dropdown": args[17],
+        "width": args[18],
+        "height": args[19],
+        "num_images": args[20],
+        "guidance_threshold": args[21],
+        "depth_type": args[22],
+        "lora_model_dropdown": args[23],
+        "lora_scale": args[24]
+    }
+    
+    filename = f"{config_name}.json"
+    with open(os.path.join(CONFIG_DIR, filename), 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    # Save the latest used config name
+    with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
+        f.write(config_name)
+    
+    config_list = get_config_list()
+    return config_list, config_name
+
+def update_config_dropdown(config_list, selected_config):
+        return gr.update(choices=config_list, value=selected_config)
+
+def load_config(config_name):
+    if not config_name:
+        return [gr.update()] * 25  # Return no updates if no config is selected
+    
+    filename = f"{config_name}.json"
+    filepath = os.path.join(CONFIG_DIR, filename)
+    
+    if not os.path.exists(filepath):
+        print(f"Config file {filename} not found.")
+        return [gr.update()] * 25
+    
+    with open(filepath, 'r') as f:
+        config = json.load(f)
+    
+    # Save the latest used config name
+    with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
+        f.write(config_name)
+    
+    return [
+        gr.update(value=config["prompt"]),
+        gr.update(value=config["negative_prompt"]),
+        gr.update(value=config["style"]),
+        gr.update(value=config["num_steps"]),
+        gr.update(value=config["identitynet_strength_ratio"]),
+        gr.update(value=config["adapter_strength_ratio"]),
+        gr.update(value=config["pose_strength"]),
+        gr.update(value=config["canny_strength"]),
+        gr.update(value=config["depth_strength"]),
+        gr.update(value=config["controlnet_selection"]),
+        gr.update(value=config["guidance_scale"]),
+        gr.update(value=config["seed"]),
+        gr.update(value=config["randomize_seed"]),
+        gr.update(value=config["scheduler"]),
+        gr.update(value=config["enable_LCM"]),
+        gr.update(value=config["enhance_face_region"]),
+        gr.update(value=config["model_input"]),
+        gr.update(value=config["model_dropdown"]),
+        gr.update(value=config["width"]),
+        gr.update(value=config["height"]),
+        gr.update(value=config["num_images"]),
+        gr.update(value=config["guidance_threshold"]),
+        gr.update(value=config["depth_type"]),
+        gr.update(value=config["lora_model_dropdown"]),
+        gr.update(value=config["lora_scale"])
+    ]
+
+def get_config_list():
+    try:
+        if not os.path.exists(CONFIG_DIR):
+            os.makedirs(CONFIG_DIR)
+            print(f"Created config directory: {CONFIG_DIR}")
+        config_list = [f.split('.')[0] for f in os.listdir(CONFIG_DIR) if f.endswith('.json') and f.strip()]
+        print(f"Config list: {config_list}")
+        return config_list
+    except Exception as e:
+        print(f"Error in get_config_list: {str(e)}")
+        print(traceback.format_exc())
+        return []
+
+def refresh_config_list():
+    config_list = get_config_list()
+    latest_config = get_latest_config()
+    selected_config = latest_config if latest_config in config_list else None
+    print(f"Refreshed config list: {config_list}, Selected config: {selected_config}")
+    return config_list
+
+
+def get_latest_config():
+    try:
+        latest_config_path = os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE)
+        if not os.path.exists(latest_config_path):
+            print(f"Latest config file not found: {latest_config_path}")
+            return None
+        with open(latest_config_path, 'r') as f:
+            latest_config = f.read().strip()
+        print(f"Latest config: {latest_config}")
+        return latest_config
+    except Exception as e:
+        print(f"Error in get_latest_config: {str(e)}")
+        print(traceback.format_exc())
+        return None
+
+
 
 # Define the pre-defined models
 PREDEFINED_MODELS = {
@@ -1094,6 +1231,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             placeholder="low quality",
                             value="(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
                         )
+                    config_name = gr.Textbox(label="Configuration Name")
+                    save_config_btn = gr.Button("Save Configuration")
+                    config_dropdown = gr.Dropdown(label="Saved Configurations", choices=get_config_list(), value=get_latest_config())
+                    load_config_btn = gr.Button("Load Configuration")
+                    refresh_config_btn = gr.Button("Refresh Configuration List")
 
                 with gr.Column():
                     model_names = get_model_names()
@@ -1432,6 +1574,46 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 lora_scale
             ],
             outputs=[gallery, progress_status],
+        )
+
+        save_config_btn.click(
+            fn=save_config,
+            inputs=[config_name, prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
+                    adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
+                    controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
+                    enable_LCM, enhance_face_region, model_input, model_dropdown, width,
+                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale],
+            outputs=[config_dropdown, config_dropdown]
+        )
+
+        load_config_btn.click(
+            fn=load_config,
+            inputs=[config_dropdown],
+            outputs=[prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
+                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
+                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
+                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale]
+        )
+
+        refresh_config_btn.click(
+            fn=refresh_config_list,
+            outputs=[config_dropdown]
+        ).then(
+            fn=update_config_dropdown,
+            inputs=[config_dropdown],
+            outputs=[config_dropdown]
+        )
+
+        # Load the latest config on startup
+        demo.load(
+            fn=load_config,
+            inputs=[config_dropdown],
+            outputs=[prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
+                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
+                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
+                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale]
         )
 
         gr.Markdown(article)
