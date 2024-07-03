@@ -1077,8 +1077,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             value=42,
                         )
 
-                        randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
+                        
                         enhance_face_region = gr.Checkbox(label="Enhance non-face region", value=True)
+                        randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
                     with gr.Row():
                         schedulers = [
                             "DEISMultistepScheduler",
