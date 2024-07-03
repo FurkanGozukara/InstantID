@@ -33,6 +33,50 @@ from controlnet_util import load_controlnet, load_depth_estimator as load_depth,
 from common.util import clean_memory
 
 import gradio as gr
+from downloader import ensure_libraries, download_file
+
+# Define the pre-defined models
+PREDEFINED_MODELS = {
+    "RealVisXL V4.0": "https://huggingface.co/SG161222/RealVisXL_V4.0/resolve/main/RealVisXL_V4.0.safetensors",
+    "SDXL Base 1.0": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0_0.9vae.safetensors",
+    "Juggernaut-X v10": "https://huggingface.co/RunDiffusion/Juggernaut-X-v10/resolve/main/Juggernaut-X-RunDiffusion-NSFW.safetensors",
+    "Juggernaut-XL v9": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+}
+
+def get_model_files(directory):
+    return [f for f in os.listdir(directory) if f.endswith(('.safetensors', '.ckpt'))]
+
+def download_model(url, name, model_type):
+    ensure_libraries()
+    
+    # Remove '?download=true' from the end of the URL if present
+    url = url.split('?')[0]
+    
+    # Determine the download path based on model type
+    download_path = used_model_path if model_type == "Checkpoint" else used_lora_path
+    
+    # If name is not provided, use the last part of the URL as the filename
+    if not name:
+        name = url.split('/')[-1]
+    
+    # Ensure the filename has the correct extension
+    if not (name.endswith('.safetensors') or name.endswith('.ckpt')):
+        name += '.safetensors'
+    
+    dest = os.path.join(download_path, name)
+    
+    try:
+        download_file(url, dest)
+        return f"Download completed: {name}"
+    except Exception as e:
+        return f"Download failed: {str(e)}"
+
+def download_predefined_model(model_name):
+    if model_name in PREDEFINED_MODELS:
+        url = PREDEFINED_MODELS[model_name]
+        return download_model(url, model_name + ".safetensors", "Checkpoint")
+    else:
+        return "Selected model not found in predefined list."
 
 parser = argparse.ArgumentParser()
 
@@ -854,7 +898,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V14"):
+        with gr.Tab("InstantId - V15"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -1096,6 +1140,54 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 metadata_image_input = gr.Image(type="filepath", label="Upload Image")                
                 metadata_output = gr.Textbox(label="Image Metadata", lines=25, max_lines=50)
             metadata_image_input.change(fn=read_image_metadata, inputs=[metadata_image_input], outputs=[metadata_output])
+        with gr.Tab("Model Downloader"):
+            gr.Markdown("## Model Downloader")
+        
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### Checkpoints")
+                    checkpoint_files = gr.Textbox(label="Available Checkpoint Files", value="\n".join(get_model_files(used_model_path)))
+            
+                with gr.Column():
+                    gr.Markdown("### LoRAs")
+                    lora_files = gr.Textbox(label="Available LoRA Files", value="\n".join(get_model_files(used_lora_path)))
+        
+            with gr.Row():
+                model_url = gr.Textbox(label="Model Download URL")
+                model_name = gr.Textbox(label="Model Name (Optional)")
+                model_type = gr.Dropdown(choices=["Checkpoint", "LoRA"], value="Checkpoint", label="Model Type")
+        
+            download_button = gr.Button("Download Model")
+            download_status = gr.Textbox(label="Download Status")
+        
+            gr.Markdown("### Pre-defined Models")
+            predefined_model = gr.Dropdown(choices=list(PREDEFINED_MODELS.keys()), label="Select Pre-defined Model")
+            download_predefined_button = gr.Button("Download Pre-defined Model")
+        
+            refresh_button = gr.Button("Refresh File Lists")
+        
+            download_button.click(
+                fn=download_model,
+                inputs=[model_url, model_name, model_type],
+                outputs=download_status
+            )
+        
+            download_predefined_button.click(
+                fn=download_predefined_model,
+                inputs=[predefined_model],
+                outputs=download_status
+            )
+        
+            def refresh_lists():
+                return (
+                    "\n".join(get_model_files(used_model_path)),
+                    "\n".join(get_model_files(used_lora_path))
+                )
+        
+            refresh_button.click(
+                fn=refresh_lists,
+                outputs=[checkpoint_files, lora_files]
+            )
         set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale])
 
         gr.Markdown(article)
