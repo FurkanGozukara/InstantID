@@ -3,7 +3,7 @@ import sys
 from diffusers.models.unet_2d_condition import UNet2DConditionModel
 
 sys.path.append("./")
-
+from tqdm import tqdm
 from typing import Tuple
 from PIL import PngImagePlugin
 import time
@@ -37,11 +37,34 @@ from downloader import ensure_libraries, download_file
 
 # Define the pre-defined models
 PREDEFINED_MODELS = {
-    "RealVisXL V4.0": "https://huggingface.co/SG161222/RealVisXL_V4.0/resolve/main/RealVisXL_V4.0.safetensors",
+    "RealVisXL v4.0": "https://huggingface.co/SG161222/RealVisXL_V4.0/resolve/main/RealVisXL_V4.0.safetensors",
     "SDXL Base 1.0": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0_0.9vae.safetensors",
     "Juggernaut-X v10": "https://huggingface.co/RunDiffusion/Juggernaut-X-v10/resolve/main/Juggernaut-X-RunDiffusion-NSFW.safetensors",
-    "Juggernaut-XL v9": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+    "Juggernaut-XL v9": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+    "Animagine XL v3.1":"https://civitai.com/api/download/models/403131?type=Model&format=SafeTensor&size=full&fp=fp16",
+    "DynaVision XL v0.6":"https://civitai.com/api/download/models/297740",
+    "epiCRealism XL v7": "https://civitai.com/api/download/models/489217",
+    "RealCartoon-XL v6":"https://civitai.com/api/download/models/254091?type=Model&format=SafeTensor&size=pruned&fp=fp16",
+    "AAM XL Anime Mix v1":"https://civitai.com/api/download/models/303526",
+    "anima_pencil-XL v5" : "https://civitai.com/api/download/models/597138",
+    "HimawariMix XL v13": "https://civitai.com/api/download/models/558064",
+    "Jib Mix Realistic XL v13": "https://civitai.com/api/download/models/610292",
+    "SDXL Yamers Anime Stage Anima":"https://civitai.com/api/download/models/377674",
+    "Deep Blue XL v4.0.1":"https://civitai.com/api/download/models/420370",
+    "SDXL FaeTastic v24": "https://civitai.com/api/download/models/291443",
+    "PixelWave v10":"https://civitai.com/api/download/models/542574",
+    "Pixel Art Diffusion XL Sprite Shaper":"https://civitai.com/api/download/models/364043",
+    "Halcyon SDXL v1.7":"https://civitai.com/api/download/models/610541",
+    "WildCardX-XL-Fusion OG":"https://civitai.com/api/download/models/345685",
+    "Raemu XL v4" : "https://civitai.com/api/download/models/613928",
+    "Pokemon Trainer Sprite PixelArt v1" : "https://civitai.com/api/download/models/443092"
+
+
+
+
 }
+
+
 
 def get_model_files(directory):
     return [f for f in os.listdir(directory) if f.endswith(('.safetensors', '.ckpt'))]
@@ -852,6 +875,111 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         print(f"{len(images_generated)} images generated in {total_time:.2f} seconds, average {average_time_per_image:.2f} seconds per image.")
         return images_generated, gr.update(visible=True)
 
+    def generate_all_variations(
+        variation_type,
+        face_file,
+        pose_file,
+        prompt,
+        negative_prompt,
+        style_name,
+        num_steps,
+        identitynet_strength_ratio,
+        adapter_strength_ratio,
+        pose_strength,
+        canny_strength,
+        depth_strength,
+        controlnet_selection,
+        guidance_scale,
+        seed,
+        scheduler,
+        enable_LCM,        
+        enhance_face_region,
+        model_input,
+        model_dropdown,
+        width,
+        height,
+        num_images,
+        guidance_threshold,
+        depth_type,
+        lora_model_dropdown,
+        lora_scale,
+        progress=gr.Progress(track_tqdm=True)
+    ):
+        all_images = []
+    
+        if variation_type == "styles":
+            variations = STYLE_NAMES
+            total_variations = len(variations)
+            variable_name = "style"
+        elif variation_type == "models":
+            variations = get_model_names()
+            total_variations = len(variations)
+            variable_name = "model"
+        else:
+            raise ValueError("Invalid variation_type. Must be 'styles' or 'models'.")
+
+        progress_text = gr.Textbox(label="Generation Progress", interactive=False)
+        yield [], gr.update(visible=True), gr.update(visible=True, value="Starting generation...")
+
+        start_time = time.time()
+        for index, variation in enumerate(variations, start=1):
+            if variation_type == "styles":
+                current_style = variation
+                current_model = model_dropdown
+            else:
+                current_style = style_name
+                current_model = variation
+
+            images, _ = generate_image(
+                face_file,
+                pose_file,
+                prompt,
+                negative_prompt,
+                current_style,
+                num_steps,
+                identitynet_strength_ratio,
+                adapter_strength_ratio,
+                pose_strength,
+                canny_strength,
+                depth_strength,
+                controlnet_selection,
+                guidance_scale,
+                seed,
+                scheduler,
+                enable_LCM,        
+                enhance_face_region,
+                model_input,
+                current_model,
+                width,
+                height,
+                num_images,
+                guidance_threshold,
+                depth_type,
+                lora_model_dropdown,
+                lora_scale,
+                progress
+            )
+            all_images.extend(images)
+
+            elapsed_time = time.time() - start_time
+            images_generated = index * num_images
+            total_images = total_variations * num_images
+            images_left = total_images - images_generated
+            percent_complete = (images_generated / total_images) * 100
+
+            eta = (elapsed_time / images_generated) * images_left if images_generated > 0 else 0
+
+            progress_message = f"Generated {images_generated}/{total_images} images ({percent_complete:.2f}% complete)\n"
+            progress_message += f"Current {variable_name}: {variation}\n"
+            progress_message += f"Elapsed time: {elapsed_time:.2f} seconds\n"
+            progress_message += f"Estimated time remaining: {eta:.2f} seconds"
+            print(progress_message)
+
+            yield all_images, gr.update(visible=True), gr.update(visible=True, value=progress_message)
+
+        final_message = f"Generation complete! Total time: {time.time() - start_time:.2f} seconds"
+        yield all_images, gr.update(visible=True), gr.update(visible=True, value=final_message)
+
     def set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet):
         global pipe
         if len(controlnet_selection) > 0:
@@ -906,7 +1034,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V15"):
+        with gr.Tab("InstantId - V16"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -964,6 +1092,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
                             btn_open_outputs = gr.Button("Open Outputs Folder")
                             btn_open_outputs.click(fn=open_folder)
+                            generate_all_styles_button = gr.Button("Generate With All Styles (Loop)", variant="secondary")
+                            generate_all_models_button = gr.Button("Generate With All Models (Loop)", variant="secondary")
                     with gr.Row():
                         with gr.Column():
                             model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
@@ -1135,6 +1265,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     outputs=[gallery, usage_tips],
                 )
 
+
                 enable_LCM.input(
                     fn=toggle_lcm_ui,
                     inputs=[enable_LCM],
@@ -1198,9 +1329,80 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 outputs=[checkpoint_files, lora_files]
             )
         set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale])
+        generate_all_styles_button.click(
+            fn=generate_all_variations,
+            inputs=[
+                gr.Textbox(value="styles", visible=False)  # Hidden input to specify variation type
+            ] + [
+                face_file,
+                pose_file,
+                prompt,
+                negative_prompt,
+                style,
+                num_steps,
+                identitynet_strength_ratio,
+                adapter_strength_ratio,
+                pose_strength,
+                canny_strength,
+                depth_strength,
+                controlnet_selection,
+                guidance_scale,
+                seed,
+                scheduler,
+                enable_LCM,                    
+                enhance_face_region,
+                model_input,
+                model_dropdown,
+                width,
+                height,
+                num_images,
+                guidance_threshold,
+                depth_type,
+                lora_model_dropdown,
+                lora_scale
+            ],
+            outputs=[gallery, usage_tips],
+        )
+
+        generate_all_models_button.click(
+            fn=generate_all_variations,
+            inputs=[
+                gr.Textbox(value="models", visible=False)  # Hidden input to specify variation type
+            ] + [
+                face_file,
+                pose_file,
+                prompt,
+                negative_prompt,
+                style,
+                num_steps,
+                identitynet_strength_ratio,
+                adapter_strength_ratio,
+                pose_strength,
+                canny_strength,
+                depth_strength,
+                controlnet_selection,
+                guidance_scale,
+                seed,
+                scheduler,
+                enable_LCM,                    
+                enhance_face_region,
+                model_input,
+                model_dropdown,
+                width,
+                height,
+                num_images,
+                guidance_threshold,
+                depth_type,
+                lora_model_dropdown,
+                lora_scale
+            ],
+            outputs=[gallery, usage_tips],
+        )
 
         gr.Markdown(article)
     demo.launch(inbrowser=True, share=share)
+
+
 
 if __name__ == "__main__":
     main(args.pretrained_model_folder,args.enable_LCM,args.share)
