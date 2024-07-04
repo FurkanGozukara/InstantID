@@ -14,7 +14,7 @@
 
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
+import copy
 import cv2
 import math
 import numpy as np
@@ -640,6 +640,43 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         
         return prompt_image_emb.to(device=device, dtype=dtype)
     
+
+
+    def generate_head_mask(self, face_info, image):
+        # If image is a list, use a deep copy of the first image
+        if isinstance(image, list):
+            image = copy.deepcopy(image[0])
+        else:
+            image = copy.deepcopy(image)
+    
+        # Convert to numpy array if it's not already
+        if not isinstance(image, np.ndarray):
+            image = np.array(image)
+        # Extract face bounding box
+        x1, y1, x2, y2 = face_info['bbox']
+    
+        # Calculate head region (expand the face bounding box)
+        head_width = x2 - x1
+        head_height = y2 - y1
+    
+        # Expand the region to cover the whole head
+        expansion_factor = 1.5
+        head_x1 = max(0, int(x1 - (expansion_factor - 1) * head_width / 2))
+        head_y1 = max(0, int(y1 - (expansion_factor - 1) * head_height / 2))
+        head_x2 = min(image.shape[1], int(x2 + (expansion_factor - 1) * head_width / 2))
+        head_y2 = min(image.shape[0], int(y2 + (expansion_factor - 1) * head_height / 2))
+    
+        # Create a blank mask
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    
+        # Fill the head region with white
+        cv2.rectangle(mask, (head_x1, head_y1), (head_x2, head_y2), 255, -1)
+    
+        # Apply Gaussian blur to smooth the edges
+        mask = cv2.GaussianBlur(mask, (31, 31), 0)
+    
+        return mask
+
     
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
@@ -684,6 +721,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         # IP adapter
         ip_adapter_scale=None,
         # Enhance Face Region
+        head_only_control: bool = False,
+        face_info: Optional[Dict] = None,
         control_mask = None,
         dtype: torch.dtype = torch.float32,
         device: torch.device = torch.device('cuda'),
@@ -923,6 +962,13 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                                          num_images_per_prompt,
                                                          dtype,
                                                          do_classifier_free_guidance)
+
+        if head_only_control and face_info is not None:
+            head_mask = self.generate_head_mask(face_info, image)
+            head_mask = torch.from_numpy(head_mask).float().to(device) / 255.0
+            head_mask = head_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+        else:
+            head_mask = None
        
         # 4. Prepare image
         if isinstance(controlnet, ControlNetModel):
@@ -1116,41 +1162,56 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         if isinstance(controlnet_cond_scale, list):
                             controlnet_cond_scale = controlnet_cond_scale[0]
                         cond_scale = controlnet_cond_scale * controlnet_keep[i]
-
                     if isinstance(self.controlnet, MultiControlNetModel):
                         down_block_res_samples_list, mid_block_res_sample_list = [], []
                         for control_index in range(len(self.controlnet.nets)):
                             controlnet = self.controlnet.nets[control_index].to(_device)                        
                             if control_index == 0:
-                                # assume fhe first controlnet is IdentityNet
+                                # assume the first controlnet is IdentityNet
                                 controlnet_prompt_embeds = prompt_image_emb
                             else:
                                 controlnet_prompt_embeds = prompt_embeds
-                            down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
-                                                                                    t,
-                                                                                    encoder_hidden_states=controlnet_prompt_embeds,
-                                                                                    controlnet_cond=image[control_index],
-                                                                                    conditioning_scale=cond_scale[control_index],
-                                                                                    guess_mode=guess_mode,
-                                                                                    added_cond_kwargs=controlnet_added_cond_kwargs,
-                                                                                    return_dict=False)
+                            down_block_res_samples, mid_block_res_sample = controlnet(
+                                control_model_input,
+                                t,
+                                encoder_hidden_states=controlnet_prompt_embeds,
+                                controlnet_cond=image[control_index],
+                                conditioning_scale=cond_scale[control_index],
+                                guess_mode=guess_mode,
+                                added_cond_kwargs=controlnet_added_cond_kwargs,
+                                return_dict=False
+                            )
 
-                            # controlnet mask
-                            if control_index == 0 and control_mask_wight_image_list is not None:
-                                down_block_res_samples = [
-                                    down_block_res_sample * mask_weight
-                                    for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_list)
-                                ]
-                                mid_block_res_sample *= control_mask_wight_image_list[-1]
+                            # Apply head mask if head_only_control is True
+                            if head_only_control and control_index > 0:  # Don't apply to IdentityNet
+                                if 'head_mask' not in locals():
+                                    head_mask = self.generate_head_mask(face_info, image[control_index])
+                                    head_mask = torch.from_numpy(head_mask).float().to(_device)
+                                    head_mask = head_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+
+                                # Resize head_mask for each down_block_res_sample
+                                resized_head_masks = [F.interpolate(head_mask, size=sample.shape[2:], mode='bilinear', align_corners=False) for sample in down_block_res_samples]
+                                down_block_res_samples = [sample * mask for sample, mask in zip(down_block_res_samples, resized_head_masks)]
+
+                                # Resize head_mask for mid_block_res_sample
+                                mid_block_head_mask = F.interpolate(head_mask, size=mid_block_res_sample.shape[2:], mode='bilinear', align_corners=False)
+                                mid_block_res_sample = mid_block_res_sample * mid_block_head_mask
 
                             down_block_res_samples_list.append(down_block_res_samples)
                             mid_block_res_sample_list.append(mid_block_res_sample)
                             del controlnet
                             clean_memory()
 
-                        mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
-                        down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
-                                                zip(*down_block_res_samples_list)]
+                        if mid_block_res_sample_list:
+                            mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
+                        else:
+                            mid_block_res_sample = torch.zeros_like(control_model_input)
+
+                        if down_block_res_samples_list:
+                            down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) 
+                                                      for down_block_res_samples in zip(*down_block_res_samples_list)]
+                        else:
+                            down_block_res_samples = [torch.zeros_like(control_model_input) for _ in range(len(self.unet.down_blocks))]
                         
                     else:
                         self.controlnet.to(_device)
@@ -1313,5 +1374,3 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             return (image,)
 
         return StableDiffusionXLPipelineOutput(images=image)
-   
-    

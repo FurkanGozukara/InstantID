@@ -882,6 +882,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         depth_type,
         lora_model_dropdown,
         lora_scale,
+        head_only_control,
         progress=gr.Progress(),
     ):
         global controlnet_map, controlnet_map_fn
@@ -966,10 +967,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         control_mask=control_mask,
                         controlnet_conditioning_scale=control_scales,
                         num_inference_steps=num_steps,
+                        head_only_control=head_only_control,
                         guidance_scale=guidance_scale,
                         height=height_target,
                         width=width_target,                
                         generator=generator,
+                        face_info=face_info,
                         end_cfg=guidance_threshold,
                         device=pipe.device,
                         dtype=dtype
@@ -1113,6 +1116,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             depth_type,
             lora_model_dropdown,
             lora_scale,
+            head_only_control,
             progress
             )
             all_images.extend(images)
@@ -1319,6 +1323,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             with gr.Row():
                 with gr.Column():
                     with gr.Row():
+                        head_only_control = gr.Checkbox(label="Apply ControlNet to Head Only", value=False)
+                    with gr.Row():
 
                         pose_strength = gr.Slider(
                             label="Pose strength",
@@ -1432,7 +1438,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         guidance_threshold,
                         depth_type,
                         lora_model_dropdown,
-                        lora_scale
+                        lora_scale,
+                        head_only_control
                     ],
                     outputs=[gallery, progress_status, seed],
                 )

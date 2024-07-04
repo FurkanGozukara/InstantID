@@ -242,6 +242,66 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         
         return prompt_image_emb.to(device=device, dtype=dtype)
 
+    def get_head_mask(self, image):
+        # Convert the image to a format suitable for face detection
+        if isinstance(image, torch.Tensor):
+            image_np = image.cpu().numpy().transpose(1, 2, 0)
+            image_np = (image_np * 255).astype(np.uint8)
+        elif isinstance(image, Image.Image):
+            image_np = np.array(image)
+        else:
+            image_np = image
+
+        # Ensure the image is in RGB format
+        if image_np.shape[2] == 4:  # RGBA
+            image_np = image_np[:, :, :3]
+        
+        # Convert to BGR for FaceAnalysis
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+        # Detect faces
+        faces = self.app.get(image_bgr)
+
+        # Create an empty mask
+        mask = np.zeros(image_np.shape[:2], dtype=np.float32)
+
+        if faces:
+            # Use the first detected face (assuming it's the main face)
+            face = faces[0]
+            x1, y1, x2, y2 = map(int, face['bbox'])
+
+            # Expand the bounding box to include more of the head
+            height, width = image_np.shape[:2]
+            expand_ratio = 0.5
+            dx = int((x2 - x1) * expand_ratio)
+            dy = int((y2 - y1) * expand_ratio)
+            x1 = max(0, x1 - dx)
+            y1 = max(0, y1 - dy)
+            x2 = min(width, x2 + dx)
+            y2 = min(height, y2 + dy)
+
+            # Create a circular mask
+            center = ((x1 + x2) // 2, (y1 + y2) // 2)
+            radius = max(x2 - x1, y2 - y1) // 2
+            y, x = np.ogrid[:height, :width]
+            dist_from_center = np.sqrt((x - center[0])**2 + (y - center[1])**2)
+            circular_mask = dist_from_center <= radius
+
+            # Apply a gradual falloff at the edges
+            falloff_width = radius * 0.2
+            falloff = np.clip(1 - (dist_from_center - radius) / falloff_width, 0, 1)
+            mask = np.maximum(mask, falloff * circular_mask)
+
+        # Convert mask to tensor and add batch and channel dimensions
+        mask_tensor = torch.from_numpy(mask).float().unsqueeze(0).unsqueeze(0)
+
+        # Ensure the mask is on the same device as the input image
+        if isinstance(image, torch.Tensor):
+            mask_tensor = mask_tensor.to(image.device)
+
+        return mask_tensor
+
+
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
