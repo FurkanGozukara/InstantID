@@ -1194,7 +1194,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V16"):
+        with gr.Tab("InstantId - V17"):
             gr.Markdown(title)
             gr.Markdown(description)
             
