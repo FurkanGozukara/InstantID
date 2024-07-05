@@ -968,6 +968,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         controlnet_conditioning_scale=control_scales,
                         num_inference_steps=num_steps,
                         head_only_control=head_only_control,
+                        controlnet_selection=controlnet_selection,
                         guidance_scale=guidance_scale,
                         height=height_target,
                         width=width_target,                
@@ -1045,6 +1046,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         canny_strength,
         depth_strength,
         controlnet_selection,
+        head_only_control,
         guidance_scale,
         seed,
         randomize_seed,  # Add this line
@@ -1323,7 +1325,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             with gr.Row():
                 with gr.Column():
                     with gr.Row():
-                        head_only_control = gr.Checkbox(label="Apply ControlNet to Head Only", value=False)
+                        head_only_control = gr.CheckboxGroup(
+                            label="Apply Head-Only Control to",
+                            choices=["pose", "canny", "depth"],
+                            value=[],  # Default to empty list
+                        )
                     with gr.Row():
 
                         pose_strength = gr.Slider(
@@ -1533,6 +1539,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 canny_strength,
                 depth_strength,
                 controlnet_selection,
+                head_only_control,
                 guidance_scale,
                 seed,
                 randomize_seed,  # Add this line
@@ -1574,6 +1581,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 canny_strength,
                 depth_strength,
                 controlnet_selection,
+                head_only_control,
                 guidance_scale,
                 seed,
                 randomize_seed,  # Add this line

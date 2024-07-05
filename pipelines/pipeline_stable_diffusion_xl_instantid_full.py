@@ -721,7 +721,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         # IP adapter
         ip_adapter_scale=None,
         # Enhance Face Region
-        head_only_control: bool = False,
+        head_only_control: List[str] = [],
+        controlnet_selection: List[str] = [],
         face_info: Optional[Dict] = None,
         control_mask = None,
         dtype: torch.dtype = torch.float32,
@@ -1171,6 +1172,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                 controlnet_prompt_embeds = prompt_image_emb
                             else:
                                 controlnet_prompt_embeds = prompt_embeds
+        
                             down_block_res_samples, mid_block_res_sample = controlnet(
                                 control_model_input,
                                 t,
@@ -1184,18 +1186,27 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
                             # Apply head mask if head_only_control is True
                             if head_only_control and control_index > 0:  # Don't apply to IdentityNet
-                                if 'head_mask' not in locals():
-                                    head_mask = self.generate_head_mask(face_info, image[control_index])
-                                    head_mask = torch.from_numpy(head_mask).float().to(_device)
-                                    head_mask = head_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+                                current_controlnet_type = controlnet_selection[control_index - 1]
+                                if current_controlnet_type in head_only_control:
+                                    if 'head_mask' not in locals():
+                                        head_mask = self.generate_head_mask(face_info, image[control_index])
+                                        head_mask = torch.from_numpy(head_mask).float().to(_device)
+                                        head_mask = head_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
 
-                                # Resize head_mask for each down_block_res_sample
-                                resized_head_masks = [F.interpolate(head_mask, size=sample.shape[2:], mode='bilinear', align_corners=False) for sample in down_block_res_samples]
-                                down_block_res_samples = [sample * mask for sample, mask in zip(down_block_res_samples, resized_head_masks)]
+                                    # Resize head_mask for each down_block_res_sample
+                                    resized_head_masks = [F.interpolate(head_mask, size=sample.shape[2:], mode='bilinear', align_corners=False) for sample in down_block_res_samples]
+        
+                                    # Ensure all tensors are on the same device
+                                    down_block_res_samples = [sample.to(_device) for sample in down_block_res_samples]
+                                    resized_head_masks = [mask.to(_device) for mask in resized_head_masks]
+        
+                                    down_block_res_samples = [sample * mask for sample, mask in zip(down_block_res_samples, resized_head_masks)]
 
-                                # Resize head_mask for mid_block_res_sample
-                                mid_block_head_mask = F.interpolate(head_mask, size=mid_block_res_sample.shape[2:], mode='bilinear', align_corners=False)
-                                mid_block_res_sample = mid_block_res_sample * mid_block_head_mask
+                                    # Resize head_mask for mid_block_res_sample
+                                    mid_block_head_mask = F.interpolate(head_mask, size=mid_block_res_sample.shape[2:], mode='bilinear', align_corners=False)
+                                    mid_block_res_sample = mid_block_res_sample.to(_device)
+                                    mid_block_head_mask = mid_block_head_mask.to(_device)
+                                    mid_block_res_sample = mid_block_res_sample * mid_block_head_mask
 
                             down_block_res_samples_list.append(down_block_res_samples)
                             mid_block_res_sample_list.append(mid_block_res_sample)
@@ -1205,13 +1216,21 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         if mid_block_res_sample_list:
                             mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
                         else:
+                            print("Warning: mid_block_res_sample_list is empty")
                             mid_block_res_sample = torch.zeros_like(control_model_input)
 
                         if down_block_res_samples_list:
                             down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) 
                                                       for down_block_res_samples in zip(*down_block_res_samples_list)]
                         else:
+                            print("Warning: down_block_res_samples_list is empty")
                             down_block_res_samples = [torch.zeros_like(control_model_input) for _ in range(len(self.unet.down_blocks))]
+
+                        mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
+                        down_block_res_samples = [
+                            torch.stack(down_block_res_samples).sum(dim=0)
+                            for down_block_res_samples in zip(*down_block_res_samples_list)
+                        ]
                         
                     else:
                         self.controlnet.to(_device)
