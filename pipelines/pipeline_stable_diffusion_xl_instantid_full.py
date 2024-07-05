@@ -614,30 +614,72 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             if isinstance(attn_processor, IPAttnProcessor):
                 attn_processor.scale = scale
    
-    def _encode_prompt_image_emb(self, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):
+    #def _encode_prompt_image_emb(self, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):
         
+    #    if isinstance(prompt_image_emb, torch.Tensor):
+    #        prompt_image_emb = prompt_image_emb.clone().detach()
+    #    else:
+    #        prompt_image_emb = torch.tensor(prompt_image_emb)
+            
+    #    prompt_image_emb = prompt_image_emb.reshape([1, -1, self.image_proj_model_in_features])
+        
+    #    if do_classifier_free_guidance:
+    #        prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb], dim=0)
+    #    else:
+    #        prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
+        
+    #    #if self.device.type == 'cuda':
+    #    prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
+    #                                            dtype=self.image_proj_model.latents.dtype)
+            
+    #    prompt_image_emb = self.image_proj_model(prompt_image_emb)
+
+    #    bs_embed, seq_len, _ = prompt_image_emb.shape
+    #    prompt_image_emb = prompt_image_emb.repeat(1, num_images_per_prompt, 1)
+    #    prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        
+    #    return prompt_image_emb.to(device=device, dtype=dtype)
+
+    def _encode_prompt_image_emb(self, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):
         if isinstance(prompt_image_emb, torch.Tensor):
             prompt_image_emb = prompt_image_emb.clone().detach()
         else:
             prompt_image_emb = torch.tensor(prompt_image_emb)
-            
+
         prompt_image_emb = prompt_image_emb.reshape([1, -1, self.image_proj_model_in_features])
-        
+
         if do_classifier_free_guidance:
             prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb], dim=0)
         else:
             prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
+
+        # Determine if we're using an fp16-only GPU
+        is_fp16_only_gpu = device.type == "cuda" and not torch.cuda.is_bf16_supported()
+        is_8bit_mode = getattr(self.unet, 'dtype', None) == torch.float8_e4m3fn
+
+        # Get the current dtype of the image_proj_model
+        current_dtype = next(self.image_proj_model.parameters()).dtype
+
+        if is_fp16_only_gpu and is_8bit_mode:
+            # Convert input to fp16 for processing
+            prompt_image_emb = prompt_image_emb.to(device=device, dtype=torch.float16)
         
-        #if self.device.type == 'cuda':
-        prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
-                                                dtype=self.image_proj_model.latents.dtype)
-            
-        prompt_image_emb = self.image_proj_model(prompt_image_emb)
+            # Ensure the image_proj_model is in fp16
+            self.image_proj_model = self.image_proj_model.to(dtype=torch.float16)
+        
+            # Process the input through the image_proj_model in fp16
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                prompt_image_emb = self.image_proj_model(prompt_image_emb)
+        else:
+            # Use the original dtype for other cases
+            prompt_image_emb = prompt_image_emb.to(device=device, dtype=current_dtype)
+            prompt_image_emb = self.image_proj_model(prompt_image_emb)
 
         bs_embed, seq_len, _ = prompt_image_emb.shape
         prompt_image_emb = prompt_image_emb.repeat(1, num_images_per_prompt, 1)
         prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
-        
+
+        # Convert to the desired output dtype
         return prompt_image_emb.to(device=device, dtype=dtype)
     
 
