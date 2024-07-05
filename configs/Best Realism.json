@@ -1,5 +1,5 @@
 {
-  "timestamp": "2024-07-05T14:51:13.149226",
+  "timestamp": "2024-07-05T14:51:35.104890",
   "prompt": "",
   "negative_prompt": "(text:1.2), watermark, (frame:1.2), deformed, ugly, deformed eyes, blur, out of focus, blurry, monochrome",
   "style": "Watercolor",
@@ -9,7 +9,9 @@
   "pose_strength": 0.4,
   "canny_strength": 0.4,
   "depth_strength": 0.4,
-  "controlnet_selection": [],
+  "controlnet_selection": [
+    "canny"
+  ],
   "guidance_scale": 5,
   "seed": 42,
   "randomize_seed": true,
@@ -25,5 +27,7 @@
   "depth_type": "LiheYoung/depth_anything",
   "lora_model_dropdown": [],
   "lora_scale": 1,
-  "head_only_control": []
+  "head_only_control": [
+    "canny"
+  ]
 }

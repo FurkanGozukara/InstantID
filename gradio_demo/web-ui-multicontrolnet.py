@@ -71,7 +71,8 @@ def save_config(config_name, *args):
         "guidance_threshold": args[21],
         "depth_type": args[22],
         "lora_model_dropdown": args[23],
-        "lora_scale": args[24]
+        "lora_scale": args[24],
+        "head_only_control": args[25]
     }
     
     filename = f"{config_name}.json"
@@ -92,14 +93,14 @@ def load_config(config_name):
     if not config_name:
         with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
             f.write("")
-        return [gr.update()] * 25  # Return no updates if no config is selected
+        return [gr.update()] * 26  # Return no updates if no config is selected
     
     filename = f"{config_name}.json"
     filepath = os.path.join(CONFIG_DIR, filename)
     
     if not os.path.exists(filepath):
         print(f"Config file {filename} not found.")
-        return [gr.update()] * 25
+        return [gr.update()] * 26
     
     with open(filepath, 'r') as f:
         config = json.load(f)
@@ -133,7 +134,8 @@ def load_config(config_name):
         gr.update(value=config["guidance_threshold"]),
         gr.update(value=config["depth_type"]),
         gr.update(value=config["lora_model_dropdown"]),
-        gr.update(value=config["lora_scale"])
+        gr.update(value=config["lora_scale"]),
+        gr.update(value=config["head_only_control"])
     ]
 
 def get_config_list():
@@ -359,6 +361,7 @@ def set_metadata_settings(image_path):
         seed = int(metadata.get("Used Seed", "42"))
         enhance_face_region = metadata.get("Enhance non-face region", "True") == "True"
         scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
+        head_only_control = metadata.get("Apply Head-Only Control to", "").split(", ") if len(metadata.get("Apply Head-Only Control to", "")) > 1 else []
         
 
     updates = [gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)]
@@ -375,6 +378,7 @@ def set_metadata_settings(image_path):
         updates.append(gr.update())  # Do not update if the path is empty
     lora_scale = float(metadata.get("LoRA Scale", "1.0"))
     updates.append(gr.update(value=lora_scale))
+    updates.append(gr.update(value=head_only_control))
     return tuple(updates)
 
 
@@ -1017,6 +1021,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     meta.add_text("Used Seed", str(seed))
                     meta.add_text("Enhance non-face region", str(enhance_face_region))
                     meta.add_text("Used Scheduler", str(scheduler))
+                    meta.add_text("Apply Head-Only Control to", ", ".join(head_only_control))
                     image.save(output_path, "PNG", pnginfo=meta)
                     images_generated.append(image)
 
@@ -1196,7 +1201,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V17"):
+        with gr.Tab("InstantId - V18"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -1521,7 +1526,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 fn=refresh_lists,
                 outputs=[checkpoint_files, lora_files]
             )
-        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale])
+        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control])
         generate_all_styles_button.click(
             fn=generate_all_variations,
             inputs=[
@@ -1607,7 +1612,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale],
+                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control],
             outputs=[config_dropdown, config_dropdown]
         )
 
@@ -1618,7 +1623,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
         )
 
         refresh_config_btn.click(
@@ -1638,7 +1643,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
         )
 
         gr.Markdown(article)
