@@ -1174,7 +1174,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     # Description
     title = r"""
-    <h1 align="center">InstantID: Zero-shot Identity-Preserving Generation in Seconds</h1>
+    <h1 align="center">InstantID Next Level: Zero-shot Identity-Preserving Generation in Seconds</h1>
     """
 
     description = r"""
@@ -1191,7 +1191,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     """
 
     tips = r"""
-    ### Usage tips of InstantID
+    ### Usage tips of InstantID Next Level
     1. If you're not satisfied with the similarity, try increasing the weight of "IdentityNet Strength" and "Adapter Strength."    
     2. If you feel that the saturation is too high, first decrease the Adapter strength. If it remains too high, then decrease the IdentityNet strength.
     3. If you find that text control is not as expected, decrease Adapter strength.
