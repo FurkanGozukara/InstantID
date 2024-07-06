@@ -31,9 +31,13 @@ def download_file(url, dest, max_retries=5):
     while attempt < max_retries:
         try:
             with requests.get(url, headers=headers, stream=True) as r:
+                if r.status_code == 416:  # Requested Range Not Satisfiable
+                    print(f"File {dest} is already fully downloaded.")
+                    return
                 r.raise_for_status()
                 total_size = int(r.headers.get('content-length', 0)) + initial_pos
-                with open(dest, 'ab') as f, tqdm(
+                mode = 'ab' if initial_pos > 0 else 'wb'
+                with open(dest, mode) as f, tqdm(
                         total=total_size,
                         initial=initial_pos,
                         unit='B',
@@ -56,6 +60,14 @@ def download_file(url, dest, max_retries=5):
                 time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 raise
+
+    # Verify file size
+    if os.path.exists(dest):
+        actual_size = os.path.getsize(dest)
+        if actual_size == total_size:
+            print(f"File {dest} successfully downloaded and verified.")
+        else:
+            print(f"Warning: File size mismatch. Expected {total_size}, got {actual_size}.")
 
 # Extract the zip file and overwrite existing files
 def extract_zip(file_path, extract_to='.'):
