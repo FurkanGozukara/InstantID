@@ -672,6 +672,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 prompt_image_emb = self.image_proj_model(prompt_image_emb)
         else:
             # Use the original dtype for other cases
+            self.image_proj_model = self.image_proj_model.to(device=device, dtype=current_dtype)
             prompt_image_emb = prompt_image_emb.to(device=device, dtype=current_dtype)
             prompt_image_emb = self.image_proj_model(prompt_image_emb)
 
