@@ -25,5 +25,9 @@
   "depth_type": "LiheYoung/depth_anything",
   "lora_model_dropdown": [],
   "lora_scale": 1,
-  "head_only_control": []
+  "head_only_control": [],
+  "except_head_control": [],
+  "except_head_pose_strength": 0.4,
+  "except_head_canny_strength": 0.4,
+  "except_head_depth_strength": 0.4
 }

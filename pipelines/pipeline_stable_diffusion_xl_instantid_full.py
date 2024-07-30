@@ -765,6 +765,10 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         ip_adapter_scale=None,
         # Enhance Face Region
         head_only_control: List[str] = [],
+        except_head_control: List[str] = [],
+        except_head_pose_strength: float = 0.0,
+        except_head_canny_strength: float = 0.0,
+        except_head_depth_strength: float = 0.0,
         controlnet_selection: List[str] = [],
         face_info: Optional[Dict] = None,
         control_mask = None,

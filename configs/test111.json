@@ -1,26 +1,26 @@
 {
-  "timestamp": "2024-07-06T01:27:43.805777",
-  "prompt": "Portrait photo of a man wearing an amazing ultra high quality platinum armor that has wings on a grass field in a forest",
+  "timestamp": "2024-07-30T18:20:15.456031",
+  "prompt": "pixel art image",
   "negative_prompt": "",
   "style": "(No style)",
   "num_steps": 30,
-  "identitynet_strength_ratio": 0.6,
-  "adapter_strength_ratio": 1,
+  "identitynet_strength_ratio": 0.8,
+  "adapter_strength_ratio": 0.8,
   "pose_strength": 0.4,
-  "canny_strength": 0.7,
+  "canny_strength": 0.6,
   "depth_strength": 0.4,
   "controlnet_selection": [
     "canny"
   ],
-  "guidance_scale": 4,
-  "seed": 854708084,
+  "guidance_scale": 4.5,
+  "seed": 1976331312,
   "randomize_seed": false,
-  "scheduler": "DPMSolverMultistepScheduler-Karras",
+  "scheduler": "EulerDiscreteScheduler",
   "enable_LCM": false,
   "enhance_face_region": true,
   "model_input": "",
-  "model_dropdown": "RealVisXL v4.0.safetensors",
-  "width": 1280,
+  "model_dropdown": "RealVisXL_V4.safetensors",
+  "width": 704,
   "height": 1280,
   "num_images": 1,
   "guidance_threshold": 1,
@@ -30,7 +30,9 @@
   "head_only_control": [
     "canny"
   ],
-    "except_head_control": [],
+  "except_head_control": [
+    ""
+  ],
   "except_head_pose_strength": 0.4,
   "except_head_canny_strength": 0.4,
   "except_head_depth_strength": 0.4

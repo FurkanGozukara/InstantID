@@ -1,7 +1,7 @@
 import sys
 
 from diffusers.models.unet_2d_condition import UNet2DConditionModel
-
+import copy
 sys.path.append("./")
 from tqdm import tqdm
 from typing import Tuple
@@ -16,7 +16,8 @@ import torch
 import random
 import numpy as np
 import argparse
-
+from torchvision import transforms
+import torch.nn.functional as F  # Add this line
 import traceback
 
 from PIL import Image
@@ -73,7 +74,11 @@ def save_config(config_name, *args):
         "depth_type": args[22],
         "lora_model_dropdown": args[23],
         "lora_scale": args[24],
-        "head_only_control": args[25]
+        "head_only_control": args[25],
+        "except_head_control": args[26],
+        "except_head_pose_strength": args[27],
+        "except_head_canny_strength": args[28],
+        "except_head_depth_strength": args[29]
     }
     
     filename = f"{config_name}.json"
@@ -94,14 +99,14 @@ def load_config(config_name):
     if not config_name:
         with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
             f.write("")
-        return [gr.update()] * 26  # Return no updates if no config is selected
+        return [gr.update()] * 30  # Return no updates if no config is selected
     
     filename = f"{config_name}.json"
     filepath = os.path.join(CONFIG_DIR, filename)
     
     if not os.path.exists(filepath):
         print(f"Config file {filename} not found.")
-        return [gr.update()] * 26
+        return [gr.update()] * 30
     
     with open(filepath, 'r') as f:
         config = json.load(f)
@@ -136,7 +141,11 @@ def load_config(config_name):
         gr.update(value=config["depth_type"]),
         gr.update(value=config["lora_model_dropdown"]),
         gr.update(value=config["lora_scale"]),
-        gr.update(value=config["head_only_control"])
+        gr.update(value=config["head_only_control"]),
+        gr.update(value=config["except_head_control"]),
+        gr.update(value=config["except_head_pose_strength"]),
+        gr.update(value=config["except_head_canny_strength"]),
+        gr.update(value=config["except_head_depth_strength"])
     ]
 
 def get_config_list():
@@ -363,7 +372,10 @@ def set_metadata_settings(image_path):
         enhance_face_region = metadata.get("Enhance non-face region", "True") == "True"
         scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
         head_only_control = metadata.get("Apply Head-Only Control to", "").split(", ") if len(metadata.get("Apply Head-Only Control to", "")) > 1 else []
-        
+        except_head_control = metadata.get("Except Head ControlNet", "").split(", ") if len(metadata.get("Apply Head-Only Control to", "")) > 1 else []
+        except_head_pose_strength = float(metadata.get("Except Head Pose strength", "0.40"))
+        except_head_canny_strength = float(metadata.get("Except Head Canny strength", "0.40"))
+        except_head_depth_strength = float(metadata.get("Except Head Depth strength", "0.40"))        
 
     updates = [gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)]
 
@@ -380,6 +392,10 @@ def set_metadata_settings(image_path):
     lora_scale = float(metadata.get("LoRA Scale", "1.0"))
     updates.append(gr.update(value=lora_scale))
     updates.append(gr.update(value=head_only_control))
+    updates.append(gr.update(value=except_head_control))
+    updates.append(gr.update(value=except_head_pose_strength))
+    updates.append(gr.update(value=except_head_canny_strength))
+    updates.append(gr.update(value=except_head_depth_strength))
     return tuple(updates)
 
 
@@ -918,6 +934,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         lora_model_dropdown,
         lora_scale,
         head_only_control,
+        except_head_control,
+        except_head_pose_strength,
+        except_head_canny_strength,
+        except_head_depth_strength,
         progress=gr.Progress(),
     ):
         global controlnet_map, controlnet_map_fn
@@ -973,7 +993,13 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale)      
         set_ip_adapter(adapter_strength_ratio)
-        control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
+        
+        control_scales, control_images = set_pipe_controlnet(
+                identitynet_strength_ratio, pose_strength, canny_strength, depth_strength,
+                controlnet_selection, width_target, height_target, face_kps, img_controlnet,
+                face_info, head_only_control, except_head_control, except_head_pose_strength,
+                except_head_canny_strength, except_head_depth_strength
+            )
 
         output_dir = "outputs"
         os.makedirs(output_dir, exist_ok=True)
@@ -1011,7 +1037,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         face_info=face_info,
                         end_cfg=guidance_threshold,
                         device=pipe.device,
-                        dtype=dtype
+                        dtype=dtype,
+                        except_head_control=except_head_control,
+                        except_head_pose_strength=except_head_pose_strength,
+                        except_head_canny_strength=except_head_canny_strength,
+                        except_head_depth_strength=except_head_depth_strength
                     ).images
 
                     image = result_images[0]
@@ -1053,6 +1083,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     meta.add_text("Enhance non-face region", str(enhance_face_region))
                     meta.add_text("Used Scheduler", str(scheduler))
                     meta.add_text("Apply Head-Only Control to", ", ".join(head_only_control))
+                    meta.add_text("Except Head ControlNet", ", ".join(except_head_control))
+                    meta.add_text("Except Head Pose strength", str(except_head_pose_strength))
+                    meta.add_text("Except Head Canny strength", str(except_head_canny_strength))
+                    meta.add_text("Except Head Depth strength", str(except_head_depth_strength))
                     image.save(output_path, "PNG", pnginfo=meta)
                     images_generated.append(image)
 
@@ -1098,6 +1132,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         depth_type,
         lora_model_dropdown,
         lora_scale,
+        except_head_control,
+        except_head_pose_strength,
+        except_head_canny_strength,
+        except_head_depth_strength,
         progress=gr.Progress(track_tqdm=True)
     ):
         all_images = []
@@ -1155,6 +1193,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             lora_model_dropdown,
             lora_scale,
             head_only_control,
+            except_head_control,
+            except_head_pose_strength,
+            except_head_canny_strength,
+            except_head_depth_strength,
             progress
             )
             all_images.extend(images)
@@ -1178,30 +1220,71 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         final_message = f"Generation complete! Total time: {time.time() - start_time:.2f} seconds"
         yield all_images, gr.update(visible=True), gr.update(visible=True, value=final_message)
 
-    def set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet):
-        global pipe
+
+    def set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet, face_info, head_only_control, except_head_control, except_head_pose_strength, except_head_canny_strength, except_head_depth_strength):
+        global pipe, controlnet_map, controlnet_map_fn
+
+        device = pipe.device
+
         if len(controlnet_selection) > 0:
-            controlnet_scales = {
+            head_scales = {
                 "pose": pose_strength,
                 "canny": canny_strength,
                 "depth": depth_strength,
             }
+            non_head_scales = {
+                "pose": except_head_pose_strength,
+                "canny": except_head_canny_strength,
+                "depth": except_head_depth_strength,
+            }
             pipe.controlnet = MultiControlNetModel(
-                [controlnet]
-                + [controlnet_map[s] for s in controlnet_selection]
+                [controlnet] + [controlnet_map[s] for s in controlnet_selection]
             )
-            control_scales = [float(identitynet_strength_ratio)] + [
-                controlnet_scales[s] for s in controlnet_selection
-            ]
+            control_scales = [float(identitynet_strength_ratio)] + [1.0 for _ in controlnet_selection]
             control_images = [face_kps] + [
                 controlnet_map_fn[s](img_controlnet).resize((width_target, height_target))
                 for s in controlnet_selection
             ]
+
+            # Generate head mask
+            head_mask = pipe.generate_head_mask(face_info, img_controlnet)
+            head_mask = torch.from_numpy(head_mask).float().to(device) / 255.0
+            head_mask = head_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+
+            # Apply controlnet modifications
+            for i, control_type in enumerate(controlnet_selection):
+                control_image = control_images[i + 1]  # +1 because the first is face_kps
+                head_strength = head_scales[control_type]
+                non_head_strength = non_head_scales[control_type]
+
+                # Convert PIL Image to tensor and move to correct device
+                control_image_tensor = transforms.ToTensor()(control_image).unsqueeze(0).to(device)
+
+                resized_head_mask = F.interpolate(head_mask, size=control_image.size[::-1], mode='bilinear', align_corners=False)
+
+                if control_type in head_only_control and control_type in except_head_control:
+                    # Apply both head and non-head strengths
+                    control_tensor = (control_image_tensor * resized_head_mask * head_strength + 
+                                      control_image_tensor * (1 - resized_head_mask) * non_head_strength)
+                elif control_type in head_only_control:
+                    # Apply only to head region
+                    control_tensor = control_image_tensor * resized_head_mask * head_strength
+                elif control_type in except_head_control:
+                    # Apply only to non-head region
+                    control_tensor = control_image_tensor * (1 - resized_head_mask) * non_head_strength
+                else:
+                    # Apply uniform strength if not specified for head-only or except-head
+                    control_tensor = control_image_tensor * head_strength
+
+                # Convert back to PIL Image
+                control_images[i + 1] = transforms.ToPILImage()(control_tensor.squeeze(0).cpu())
+
         else:
             pipe.controlnet = controlnet
             control_scales = float(identitynet_strength_ratio)
             control_images = face_kps
-        return control_scales,control_images
+
+        return control_scales, control_images
 
     # Description
     title = r"""
@@ -1362,6 +1445,35 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             with gr.Row():
                 with gr.Column():
                     with gr.Row():
+                        except_head_control = gr.CheckboxGroup(
+                            label="Except Head ControlNet",
+                            choices=["pose", "canny", "depth"],
+                            value=[],  # Default to empty list
+                        )
+                    with gr.Row():
+
+                        except_head_pose_strength = gr.Slider(
+                            label="Except Head Pose strength",
+                            minimum=0,
+                            maximum=3,
+                            step=0.05,
+                            value=0.40,
+                        )
+                        except_head_canny_strength = gr.Slider(
+                            label="Except Head Canny strength",
+                            minimum=0,
+                            maximum=3,
+                            step=0.05,
+                            value=0.40,
+                        )
+                        except_head_depth_strength = gr.Slider(
+                            label="Except Head Depth strength",
+                            minimum=0,
+                            maximum=3,
+                            step=0.05,
+                            value=0.40,
+                        )
+                    with gr.Row():
                         head_only_control = gr.CheckboxGroup(
                             label="Apply Head-Only Control to",
                             choices=["pose", "canny", "depth"],
@@ -1482,7 +1594,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         depth_type,
                         lora_model_dropdown,
                         lora_scale,
-                        head_only_control
+                        head_only_control,
+                        except_head_control,
+                        except_head_pose_strength,
+                        except_head_canny_strength,
+                        except_head_depth_strength
                     ],
                     outputs=[gallery, progress_status, seed],
                 )
@@ -1558,7 +1674,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 fn=refresh_lists,
                 outputs=[checkpoint_files, lora_files]
             )
-        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control])
+        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control,except_head_control,except_head_pose_strength,except_head_canny_strength,except_head_depth_strength])
         generate_all_styles_button.click(
             fn=generate_all_variations,
             inputs=[
@@ -1591,7 +1707,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 guidance_threshold,
                 depth_type,
                 lora_model_dropdown,
-                lora_scale
+                lora_scale,
+                except_head_control,
+                except_head_pose_strength,
+                except_head_canny_strength,
+                except_head_depth_strength
             ],
             outputs=[gallery, progress_status],
         )
@@ -1633,7 +1753,11 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 guidance_threshold,
                 depth_type,
                 lora_model_dropdown,
-                lora_scale
+                lora_scale,
+                except_head_control,
+                except_head_pose_strength,
+                except_head_canny_strength,
+                except_head_depth_strength
             ],
             outputs=[gallery, progress_status],
         )
@@ -1644,7 +1768,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control],
+                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                    except_head_control,except_head_pose_strength,except_head_canny_strength,except_head_depth_strength],
             outputs=[config_dropdown, config_dropdown]
         )
 
@@ -1655,7 +1780,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                     except_head_control,except_head_pose_strength,except_head_canny_strength,except_head_depth_strength]
         )
 
         refresh_config_btn.click(
@@ -1675,7 +1801,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,except_head_control,
+                        except_head_pose_strength,except_head_canny_strength,except_head_depth_strength]
         )
 
         gr.Markdown(article)
