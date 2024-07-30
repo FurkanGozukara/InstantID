@@ -40,6 +40,7 @@ from downloader import ensure_libraries, download_file
 
 CONFIG_DIR = "configs"
 LATEST_CONFIG_FILE = "latest_config.txt"
+current_lora_models = []
 
 def save_config(config_name, *args):
     if not os.path.exists(CONFIG_DIR):
@@ -599,17 +600,23 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
         scheduler = getattr(diffusers, scheduler_class_name)
         pipe.scheduler = scheduler.from_config(pipe.scheduler.config, **add_kwargs)  
     
+
+
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
     global used_model_path
     global used_lora_path
     _pretrained_model_folder = pretrained_model_folder
+    def update_lora_scale(lora_scale):
+        global pipe, current_lora_models
+        if current_lora_models:
+            pipe.fuse_lora(lora_scale=lora_scale)
+            print(f"LoRA scale updated to {lora_scale}")
    
     def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable):
-        global pipe  # Declare pipe as a global variable thas_cpu_offload manage it when the model changes
-        global last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status
- 
+        global pipe, last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status, current_lora_models
+
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
 
@@ -669,19 +676,43 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
     
-        pipe.unload_lora_weights()
-        if lora_model_dropdown:  # Check if any LoRA models are selected
-            for lora_model in lora_model_dropdown:
-                lora_path = os.path.join(used_lora_path, lora_model)
-                print(f"Loading LoRA: {lora_path}")
-                pipe.load_lora_weights(lora_path)
+        # Check if LoRA models have changed
+        if set(lora_model_dropdown) != set(current_lora_models):
+            # Unload all current LoRA weights
+            pipe.unload_lora_weights()
+            if hasattr(pipe, 'fused_lora_weights'):
+                pipe.fused_lora_weights = None
         
+            if lora_model_dropdown:  # Check if any LoRA models are selected
+                for lora_model in lora_model_dropdown:
+                    lora_path = os.path.join(used_lora_path, lora_model)
+                    print(f"Loading LoRA: {lora_path}")
+                    pipe.load_lora_weights(lora_path)
+            
+                pipe.fuse_lora(lora_scale=lora_scale_variable)
+                print("LoRA models loaded and fused successfully.")
+            else:
+                print("No LoRA models selected. Skipping LoRA fusion.")
+        
+            # Update the current LoRA models
+            current_lora_models = lora_model_dropdown.copy()
+        elif lora_model_dropdown:
+            # If LoRA models haven't changed but are still selected, we might need to adjust the scale
             pipe.fuse_lora(lora_scale=lora_scale_variable)
-            print("LoRA models loaded and fused successfully.")
+            print("LoRA scale adjusted.")
         else:
-            print("No LoRA models selected. Skipping LoRA fusion.")
+            # No LoRA models selected, ensure all are unloaded
+            pipe.unload_lora_weights()
+            if hasattr(pipe, 'fused_lora_weights'):
+                pipe.fused_lora_weights = None
+            current_lora_models = []
+            print("All LoRA models unloaded.")
 
-    print("Model loaded successfully.")
+        print("Model and LoRA setup completed successfully.")
+
+
+
+
 
     def restart_cpu_offload(adapter_strength_ratio):
         
@@ -1201,7 +1232,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V18"):
+        with gr.Tab("InstantId - V19"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -1271,6 +1302,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         step=0.05,
                         value=1.0,
                     )
+                        lora_scale.change(fn=update_lora_scale, inputs=[lora_scale])                  
                         with gr.Column():
                             model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
                             btn_open_outputs = gr.Button("Open Outputs Folder")
