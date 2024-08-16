@@ -1,7 +1,7 @@
 {
-  "timestamp": "2024-08-16T15:50:00.904275",
-  "prompt": "professional headshot photo of a man wearing a black a dark suit, white shirt, and dark tie with a tie clip in a news studio, hd, hdr, 2k, 4k",
-  "negative_prompt": "",
+  "timestamp": "2024-08-16T16:04:55.741428",
+  "prompt": "professional headshot photo of a man wearing a very expensive luxury pure black suit, expensive pure white shirt, and a dark tie in front of a library book shelf, hd, hdr, 2k, 4k",
+  "negative_prompt": "Blurry, Fuzzy, Hazy, Grainy, Pixelated, Noisy, Muddy, Foggy, Distorted",
   "style": "(No style)",
   "num_steps": 30,
   "identitynet_strength_ratio": 0.75,
