@@ -632,7 +632,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         reload_due_to_depth_change = (pipe and model_to_load == last_loaded_model and depth_type != last_loaded_depth_estimator)
         reload_due_to_scheduler_change = (pipe and model_to_load == last_loaded_model and scheduler != last_loaded_scheduler)
         reload_due_to_LCM_change = (pipe and model_to_load == last_loaded_model and last_LCM_status != with_LCM)
-        reload_due_to_lora_change = (set(lora_model_dropdown) != set(current_lora_models)) if not test_all_loras else (single_lora != current_lora_models)
+        reload_due_to_lora_change = (sorted(lora_model_dropdown) != sorted(current_lora_models)) if not test_all_loras else (single_lora != current_lora_models)
         reload_due_to_lora_scale_change = (lora_scale_variable != current_lora_scale)
 
         if reload_due_to_model_change:
