@@ -641,7 +641,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         reload_due_to_lora_change = (set(lora_model_dropdown) != set(current_lora_models))
         reload_due_to_lora_scale_change = (lora_scale_variable != current_lora_scale)
 
-        if reload_due_to_model_change or reload_due_to_lora_change or reload_due_to_lora_scale_change:
+        #if reload_due_to_model_change or reload_due_to_lora_change or reload_due_to_lora_scale_change:
+        if reload_due_to_model_change:
             pipe = None
             # Load controlnet
             load_controlnet_open_pose(pretrained_model_folder)
@@ -676,22 +677,32 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             last_LCM_status = with_LCM
 
         # If LoRA models have changed after the initial check, reload them
+
         if reload_due_to_lora_change or reload_due_to_lora_scale_change:
             # Unload all current LoRA weights
             pipe.unload_lora_weights()
-            pipe.unfuse_lora()
 
             if lora_model_dropdown:  # Check if any LoRA models are selected
-                for lora_model in lora_model_dropdown:
-                    lora_path = os.path.join(used_lora_path, lora_model)
-                    print(f"Loading LoRA: {lora_path}")
-                    pipe.load_lora_weights(lora_path)
+                lora_adapters = {}
+                adapter_names = []
+                adapter_weights = []
 
-                pipe.fuse_lora(lora_scale=lora_scale_variable)
-                pipe.unload_lora_weights()
-                print("LoRA models loaded and fused successfully.")
+                for i, lora_model in enumerate(lora_model_dropdown):
+                    lora_path = os.path.join(used_lora_path, lora_model)
+                    adapter_name = f"adapt{i+1}"
+                    print(f"Loading LoRA: {lora_path}")
+                    pipe.load_lora_weights(lora_path, adapter_name=adapter_name)
+            
+                    lora_adapters[adapter_name] = lora_model
+                    adapter_names.append(adapter_name)
+                    adapter_weights.append(lora_scale_variable)
+
+                # Set all adapters at once
+                pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+                print("LoRA models loaded and set successfully.")
+                print(f"Loaded LoRAs: {lora_adapters}")
             else:
-                print("No LoRA models selected. Skipping LoRA fusion.")
+                print("No LoRA models selected. Skipping LoRA loading.")
 
             # Update the current LoRA models and scale
             current_lora_models = lora_model_dropdown.copy()
@@ -1222,7 +1233,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V20"):
+        with gr.Tab("InstantId - V21"):
             gr.Markdown(title)
             gr.Markdown(description)
             
