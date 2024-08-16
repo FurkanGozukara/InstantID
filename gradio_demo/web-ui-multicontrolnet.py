@@ -1,5 +1,5 @@
 import sys
-
+import itertools
 
 from diffusers import StableDiffusionPipeline
 
@@ -615,36 +615,28 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     _pretrained_model_folder = pretrained_model_folder
 
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable, test_all_loras=False, single_lora=None):
         global pipe, last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status, current_lora_models, current_lora_scale
 
-        # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
-
-        # Determine the model to load
         model_to_load = model_input if model_input else os.path.join(used_model_path, model_dropdown) if (model_dropdown and model_dropdown != default_model) else default_model if model_dropdown == default_model else None
 
-        # Return early if no model is selected or inputted
         if not model_to_load:
             print("No model selected or inputted. Default model will be used.")
             model_to_load = default_model
 
-        # Reload CPU offload to fix bug for half mode
         if pipe and ENABLE_CPU_OFFLOAD:
             restart_cpu_offload(adapter_strength_ratio)
 
-        # Check if we need to reload the pipeline due to model change, depth estimator change, scheduler change, LCM change, LoRA model change, or LoRA scale change
         reload_due_to_model_change = (not pipe or model_to_load != last_loaded_model)
         reload_due_to_depth_change = (pipe and model_to_load == last_loaded_model and depth_type != last_loaded_depth_estimator)
         reload_due_to_scheduler_change = (pipe and model_to_load == last_loaded_model and scheduler != last_loaded_scheduler)
         reload_due_to_LCM_change = (pipe and model_to_load == last_loaded_model and last_LCM_status != with_LCM)
-        reload_due_to_lora_change = (set(lora_model_dropdown) != set(current_lora_models))
+        reload_due_to_lora_change = (set(lora_model_dropdown) != set(current_lora_models)) if not test_all_loras else (single_lora != current_lora_models)
         reload_due_to_lora_scale_change = (lora_scale_variable != current_lora_scale)
 
-        #if reload_due_to_model_change or reload_due_to_lora_change or reload_due_to_lora_scale_change:
         if reload_due_to_model_change:
             pipe = None
-            # Load controlnet
             load_controlnet_open_pose(pretrained_model_folder)
             load_depth_estimator(pretrained_model_folder, depth_type)
             clean_memory()
@@ -657,32 +649,29 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
 
-            # Update the current LoRA models and scale
-            current_lora_models = lora_model_dropdown.copy()
-            current_lora_scale = lora_scale_variable
-
-        # Reload depth estimator if needed
         if reload_due_to_depth_change:
             load_depth_estimator(pretrained_model_folder, depth_type)
             last_loaded_depth_estimator = depth_type
 
-        # Reload scheduler if needed
         if reload_due_to_scheduler_change:
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_loaded_scheduler = scheduler
 
-        # Reload LCM if needed
         if reload_due_to_LCM_change:
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_LCM_status = with_LCM
 
-        # If LoRA models have changed after the initial check, reload them
-
         if reload_due_to_lora_change or reload_due_to_lora_scale_change:
-            # Unload all current LoRA weights
             pipe.unload_lora_weights()
 
-            if lora_model_dropdown:  # Check if any LoRA models are selected
+            if test_all_loras and single_lora:
+                lora_path = os.path.join(used_lora_path, single_lora)
+                print(f"Loading single LoRA: {lora_path}")
+                pipe.load_lora_weights(lora_path)
+                pipe.set_adapters(["default"], adapter_weights=[lora_scale_variable])
+                print(f"Single LoRA loaded and set successfully: {single_lora}")
+                current_lora_models = [single_lora]
+            elif lora_model_dropdown:
                 lora_adapters = {}
                 adapter_names = []
                 adapter_weights = []
@@ -692,20 +681,19 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     adapter_name = f"adapt{i+1}"
                     print(f"Loading LoRA: {lora_path}")
                     pipe.load_lora_weights(lora_path, adapter_name=adapter_name)
-            
+        
                     lora_adapters[adapter_name] = lora_model
                     adapter_names.append(adapter_name)
                     adapter_weights.append(lora_scale_variable)
 
-                # Set all adapters at once
                 pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
                 print("LoRA models loaded and set successfully.")
                 print(f"Loaded LoRAs: {lora_adapters}")
+                current_lora_models = lora_model_dropdown.copy()
             else:
                 print("No LoRA models selected. Skipping LoRA loading.")
+                current_lora_models = []
 
-            # Update the current LoRA models and scale
-            current_lora_models = lora_model_dropdown.copy()
             current_lora_scale = lora_scale_variable
 
         print("Model and LoRA setup completed successfully.")
@@ -1086,7 +1074,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         head_only_control,
         guidance_scale,
         seed,
-        randomize_seed,  # Add this line
+        randomize_seed,
         scheduler,
         enable_LCM,        
         enhance_face_region,
@@ -1099,6 +1087,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         depth_type,
         lora_model_dropdown,
         lora_scale,
+        test_all_loras,
         progress=gr.Progress(track_tqdm=True)
     ):
         all_images = []
@@ -1114,67 +1103,82 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             raise ValueError("Invalid variation_type. Must be 'styles' or 'models'.")
 
+        lora_variations = [lora_model_dropdown]
+        if test_all_loras:
+            lora_variations = [[lora] for lora in get_lora_model_names()]
+
         progress_text = gr.Textbox(label="Generation Progress", interactive=False)
         yield [], gr.update(visible=True), gr.update(visible=True, value="Starting generation...")
 
         start_time = time.time()
+        total_combinations = total_variations * len(lora_variations)
+        combination_index = 0
+
         for index, variation in enumerate(variations, start=1):
-            if variation_type == "styles":
-                current_style = variation
-                current_model = model_dropdown
-            else:
-                current_style = style_name
-                current_model = variation
+            for lora_combination in lora_variations:
+                combination_index += 1
+                if variation_type == "styles":
+                    current_style = variation
+                    current_model = model_dropdown
+                else:
+                    current_style = style_name
+                    current_model = variation
 
-            images, _, new_seed = generate_image(
-            variation_type,
-            face_file,
-            pose_file,
-            prompt,
-            negative_prompt,
-            current_style,
-            num_steps,
-            identitynet_strength_ratio,
-            adapter_strength_ratio,
-            pose_strength,
-            canny_strength,
-            depth_strength,
-            controlnet_selection,
-            guidance_scale,
-            seed,
-            randomize_seed,  # Add this line
-            scheduler,
-            enable_LCM,        
-            enhance_face_region,
-            model_input,
-            current_model,
-            width,
-            height,
-            num_images,
-            guidance_threshold,
-            depth_type,
-            lora_model_dropdown,
-            lora_scale,
-            head_only_control,
-            progress
-            )
-            all_images.extend(images)
+                # Use reload_pipe method with the new parameters
+                reload_pipe(model_input, current_model, scheduler, adapter_strength_ratio, enable_LCM, depth_type, 
+                            lora_combination, lora_scale, test_all_loras=test_all_loras, 
+                            single_lora=lora_combination[0] if test_all_loras else None)
 
-            elapsed_time = time.time() - start_time
-            images_generated = index * num_images
-            total_images = total_variations * num_images
-            images_left = total_images - images_generated
-            percent_complete = (images_generated / total_images) * 100
+                images, _, new_seed = generate_image(
+                    variation_type,
+                    face_file,
+                    pose_file,
+                    prompt,
+                    negative_prompt,
+                    current_style,
+                    num_steps,
+                    identitynet_strength_ratio,
+                    adapter_strength_ratio,
+                    pose_strength,
+                    canny_strength,
+                    depth_strength,
+                    controlnet_selection,
+                    guidance_scale,
+                    seed,
+                    randomize_seed,
+                    scheduler,
+                    enable_LCM,        
+                    enhance_face_region,
+                    model_input,
+                    current_model,
+                    width,
+                    height,
+                    num_images,
+                    guidance_threshold,
+                    depth_type,
+                    lora_combination,
+                    lora_scale,
+                    head_only_control,
+                    progress
+                )
+                all_images.extend(images)
 
-            eta = (elapsed_time / images_generated) * images_left if images_generated > 0 else 0
+                elapsed_time = time.time() - start_time
+                images_generated = combination_index * num_images
+                total_images = total_combinations * num_images
+                images_left = total_images - images_generated
+                percent_complete = (images_generated / total_images) * 100
 
-            progress_message = f"Generated {images_generated}/{total_images} images ({percent_complete:.2f}% complete)\n"
-            progress_message += f"Current {variable_name}: {variation}\n"
-            progress_message += f"Elapsed time: {elapsed_time:.2f} seconds\n"
-            progress_message += f"Estimated time remaining: {eta:.2f} seconds"
-            print(progress_message)
+                eta = (elapsed_time / images_generated) * images_left if images_generated > 0 else 0
 
-            yield all_images, gr.update(visible=True), gr.update(visible=True, value=progress_message)
+                progress_message = f"Generated {images_generated}/{total_images} images ({percent_complete:.2f}% complete)\n"
+                progress_message += f"Current {variable_name}: {variation}\n"
+                progress_message += f"Current LoRA: {', '.join(lora_combination) if lora_combination else 'None'}\n"
+                progress_message += f"Elapsed time: {elapsed_time:.2f} seconds\n"
+                progress_message += f"Estimated time remaining: {eta:.2f} seconds"
+                print(progress_message)
+
+                yield all_images, gr.update(visible=True), gr.update(visible=True, value=progress_message)
 
         final_message = f"Generation complete! Total time: {time.time() - start_time:.2f} seconds"
         yield all_images, gr.update(visible=True), gr.update(visible=True, value=final_message)
@@ -1233,7 +1237,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V21"):
+        with gr.Tab("InstantId - V22"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -1302,7 +1306,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         maximum=10.0,
                         step=0.05,
                         value=1.0,
-                    )
+                    )  
+                            test_all_loras = gr.Checkbox(label="Test all LoRA combinations", value=False)
                                         
                         with gr.Column():
                             model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
@@ -1310,6 +1315,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             btn_open_outputs.click(fn=open_folder)
                             generate_all_styles_button = gr.Button("Generate With All Styles (Loop)", variant="secondary")
                             generate_all_models_button = gr.Button("Generate With All Models (Loop)", variant="secondary")
+                            
                     with gr.Row():
                         with gr.Column():
                             model_input = gr.Textbox(label="Hugging Face model repo name or local file full path", value="", placeholder="Enter model name or path")						
@@ -1560,6 +1566,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 outputs=[checkpoint_files, lora_files]
             )
         set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control])
+        
         generate_all_styles_button.click(
             fn=generate_all_variations,
             inputs=[
@@ -1580,7 +1587,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 head_only_control,
                 guidance_scale,
                 seed,
-                randomize_seed,  # Add this line
+                randomize_seed,
                 scheduler,
                 enable_LCM,                    
                 enhance_face_region,
@@ -1592,14 +1599,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 guidance_threshold,
                 depth_type,
                 lora_model_dropdown,
-                lora_scale
+                lora_scale,
+                test_all_loras  # Add this line
             ],
             outputs=[gallery, progress_status],
-        )
-
-        adapter_strength_ratio.change(
-            fn=update_ip_adapter_scale,
-            inputs=[adapter_strength_ratio],
         )
 
         generate_all_models_button.click(
@@ -1622,7 +1625,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 head_only_control,
                 guidance_scale,
                 seed,
-                randomize_seed,  # Add this line
+                randomize_seed,
                 scheduler,
                 enable_LCM,                    
                 enhance_face_region,
@@ -1634,9 +1637,15 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 guidance_threshold,
                 depth_type,
                 lora_model_dropdown,
-                lora_scale
+                lora_scale,
+                test_all_loras  # Add this line
             ],
             outputs=[gallery, progress_status],
+        )
+
+        adapter_strength_ratio.change(
+            fn=update_ip_adapter_scale,
+            inputs=[adapter_strength_ratio],
         )
 
         save_config_btn.click(
