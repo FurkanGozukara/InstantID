@@ -665,9 +665,9 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             pipe.unload_lora_weights()
 
             if test_all_loras and single_lora:
-                lora_path = os.path.join(used_lora_path, single_lora)
+                lora_path = os.path.join(used_lora_path, single_lora[0])
                 print(f"Loading single LoRA: {lora_path}")
-                pipe.load_lora_weights(lora_path)
+                pipe.load_lora_weights(lora_path,adapter_name="default")
                 pipe.set_adapters(["default"], adapter_weights=[lora_scale_variable])
                 print(f"Single LoRA loaded and set successfully: {single_lora}")
                 current_lora_models = [single_lora]
@@ -906,6 +906,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         lora_model_dropdown,
         lora_scale,
         head_only_control,
+        test_all_loras=False, 
+        single_lora=None,
         progress=gr.Progress(),
     ):
         global pipe, current_lora_models
@@ -960,7 +962,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale)
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale,test_all_loras,single_lora)
         set_ip_adapter(adapter_strength_ratio)
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
@@ -1114,6 +1116,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         total_combinations = total_variations * len(lora_variations)
         combination_index = 0
 
+
         for index, variation in enumerate(variations, start=1):
             for lora_combination in lora_variations:
                 combination_index += 1
@@ -1123,11 +1126,6 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 else:
                     current_style = style_name
                     current_model = variation
-
-                # Use reload_pipe method with the new parameters
-                reload_pipe(model_input, current_model, scheduler, adapter_strength_ratio, enable_LCM, depth_type, 
-                            lora_combination, lora_scale, test_all_loras=test_all_loras, 
-                            single_lora=lora_combination[0] if test_all_loras else None)
 
                 images, _, new_seed = generate_image(
                     variation_type,
@@ -1159,6 +1157,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     lora_combination,
                     lora_scale,
                     head_only_control,
+                    test_all_loras,
+                    lora_combination,
                     progress
                 )
                 all_images.extend(images)
@@ -1237,7 +1237,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V22"):
+        with gr.Tab("InstantId - V23"):
             gr.Markdown(title)
             gr.Markdown(description)
             
