@@ -1,0 +1,33 @@
+{
+  "timestamp": "2024-08-16T15:50:00.904275",
+  "prompt": "professional headshot photo of a man wearing a black a dark suit, white shirt, and dark tie with a tie clip in a news studio, hd, hdr, 2k, 4k",
+  "negative_prompt": "",
+  "style": "(No style)",
+  "num_steps": 30,
+  "identitynet_strength_ratio": 0.75,
+  "adapter_strength_ratio": 1.2,
+  "pose_strength": 0.4,
+  "canny_strength": 0.7,
+  "depth_strength": 0.4,
+  "controlnet_selection": [
+    "canny"
+  ],
+  "guidance_scale": 2.5,
+  "seed": 854708084,
+  "randomize_seed": false,
+  "scheduler": "DPMSolverMultistepScheduler-Karras",
+  "enable_LCM": false,
+  "enhance_face_region": true,
+  "model_input": "",
+  "model_dropdown": "RealVisXL_V4.safetensors",
+  "width": 1280,
+  "height": 1280,
+  "num_images": 1,
+  "guidance_threshold": 1,
+  "depth_type": "LiheYoung/depth_anything",
+  "lora_model_dropdown": [],
+  "lora_scale": 1,
+  "head_only_control": [
+    "canny"
+  ]
+}
