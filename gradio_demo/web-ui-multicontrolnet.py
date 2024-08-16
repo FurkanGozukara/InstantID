@@ -1,6 +1,7 @@
 import sys
 
-from diffusers.models.unet_2d_condition import UNet2DConditionModel
+
+from diffusers import StableDiffusionPipeline
 
 sys.path.append("./")
 from tqdm import tqdm
@@ -520,11 +521,13 @@ def load_model(pretrained_model_folder, model_name):
         else:
             model_path = model_name
         
-        unet = UNet2DConditionModel.from_pretrained(
+        pipeline = StableDiffusionPipeline.from_pretrained(
             model_path,
-            subfolder="unet",
             torch_dtype=dtypeQuantize,
         )
+
+        # Access the UNet model from the pipeline
+        unet = pipeline.unet
         # Load vae
         vae = AutoencoderKL.from_pretrained(
                 "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
@@ -582,7 +585,7 @@ def set_ip_adapter(adapter_strength_ratio):
     pipe.set_ip_adapter_scale(adapter_strength_ratio)
  
 def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
-     
+    global pipe     
     # load and disable LCM
     if with_LCM:
         lora_model = "latent-consistency/lcm-lora-sdxl"
@@ -590,7 +593,6 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
         pipe.scheduler = diffusers.LCMScheduler.from_config(pipe.scheduler.config)
         pipe.enable_lora()
     else:
-        pipe.disable_lora()     
         scheduler_class_name = scheduler.split("-")[0]
         add_kwargs = {}
         if len(scheduler.split("-")) > 1:
@@ -602,20 +604,19 @@ def load_scheduler(pretrained_model_folder, scheduler, with_LCM):
     
 
 
+current_lora_scale = 1.0
+
+
 def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     global _pretrained_model_folder
     global used_model_path
     global used_lora_path
     _pretrained_model_folder = pretrained_model_folder
-    def update_lora_scale(lora_scale):
-        global pipe, current_lora_models
-        if current_lora_models:
-            pipe.fuse_lora(lora_scale=lora_scale)
-            print(f"LoRA scale updated to {lora_scale}")
+
    
     def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable):
-        global pipe, last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status, current_lora_models
+        global pipe, last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status, current_lora_models, current_lora_scale
 
         # Trim the model_input to remove any leading or trailing whitespace
         model_input = model_input.strip() if model_input else None
@@ -627,14 +628,22 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         if not model_to_load:
             print("No model selected or inputted. Default model will be used.")
             model_to_load = default_model
-   
+
         # Reload CPU offload to fix bug for half mode
         if pipe and ENABLE_CPU_OFFLOAD:
             restart_cpu_offload(adapter_strength_ratio)
 
-        if not pipe:
-            pipe = None            
-            #load controlnet
+        # Check if we need to reload the pipeline due to model change, depth estimator change, scheduler change, LCM change, LoRA model change, or LoRA scale change
+        reload_due_to_model_change = (not pipe or model_to_load != last_loaded_model)
+        reload_due_to_depth_change = (pipe and model_to_load == last_loaded_model and depth_type != last_loaded_depth_estimator)
+        reload_due_to_scheduler_change = (pipe and model_to_load == last_loaded_model and scheduler != last_loaded_scheduler)
+        reload_due_to_LCM_change = (pipe and model_to_load == last_loaded_model and last_LCM_status != with_LCM)
+        reload_due_to_lora_change = (set(lora_model_dropdown) != set(current_lora_models))
+        reload_due_to_lora_scale_change = (lora_scale_variable != current_lora_scale)
+
+        if reload_due_to_model_change or reload_due_to_lora_change or reload_due_to_lora_scale_change:
+            pipe = None
+            # Load controlnet
             load_controlnet_open_pose(pretrained_model_folder)
             load_depth_estimator(pretrained_model_folder, depth_type)
             clean_memory()
@@ -647,66 +656,46 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
 
+            # Update the current LoRA models and scale
+            current_lora_models = lora_model_dropdown.copy()
+            current_lora_scale = lora_scale_variable
+
         # Reload depth estimator if needed
-        if (pipe and model_to_load == last_loaded_model
-            and depth_type != last_loaded_depth_estimator):          
-            load_depth_estimator(pretrained_model_folder, depth_type)  
+        if reload_due_to_depth_change:
+            load_depth_estimator(pretrained_model_folder, depth_type)
+            last_loaded_depth_estimator = depth_type
 
         # Reload scheduler if needed
-        if (pipe and model_to_load == last_loaded_model 
-            and scheduler != last_loaded_scheduler):
-            last_LCM_status = with_LCM
+        if reload_due_to_scheduler_change:
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
             last_loaded_scheduler = scheduler
 
-        if (pipe and model_to_load == last_loaded_model 
-            and last_LCM_status != with_LCM):
-            last_LCM_status = with_LCM
+        # Reload LCM if needed
+        if reload_due_to_LCM_change:
             load_scheduler(pretrained_model_folder, scheduler, with_LCM)
-            last_loaded_scheduler = scheduler
-   
-        # Reload model if needed
-        if (pipe and model_to_load != last_loaded_model):                                              
-            # Reload model        
-            pipe = load_model(_pretrained_model_folder, model_to_load)
-            last_loaded_model = model_to_load
-            last_loaded_scheduler = scheduler
             last_LCM_status = with_LCM
-            last_loaded_depth_estimator = depth_type
-            load_scheduler(pretrained_model_folder, scheduler, with_LCM)
-            assign_last_params(adapter_strength_ratio, ENABLE_CPU_OFFLOAD)
-    
-        # Check if LoRA models have changed
-        if set(lora_model_dropdown) != set(current_lora_models):
+
+        # If LoRA models have changed after the initial check, reload them
+        if reload_due_to_lora_change or reload_due_to_lora_scale_change:
             # Unload all current LoRA weights
             pipe.unload_lora_weights()
-            if hasattr(pipe, 'fused_lora_weights'):
-                pipe.fused_lora_weights = None
-        
+            pipe.unfuse_lora()
+
             if lora_model_dropdown:  # Check if any LoRA models are selected
                 for lora_model in lora_model_dropdown:
                     lora_path = os.path.join(used_lora_path, lora_model)
                     print(f"Loading LoRA: {lora_path}")
                     pipe.load_lora_weights(lora_path)
-            
+
                 pipe.fuse_lora(lora_scale=lora_scale_variable)
+                pipe.unload_lora_weights()
                 print("LoRA models loaded and fused successfully.")
             else:
                 print("No LoRA models selected. Skipping LoRA fusion.")
-        
-            # Update the current LoRA models
+
+            # Update the current LoRA models and scale
             current_lora_models = lora_model_dropdown.copy()
-        elif lora_model_dropdown:
-            # If LoRA models haven't changed but are still selected, we might need to adjust the scale
-            pipe.fuse_lora(lora_scale=lora_scale_variable)
-            print("LoRA scale adjusted.")
-        else:
-            # No LoRA models selected, ensure all are unloaded
-            pipe.unload_lora_weights()
-            if hasattr(pipe, 'fused_lora_weights'):
-                pipe.fused_lora_weights = None
-            current_lora_models = []
-            print("All LoRA models unloaded.")
+            current_lora_scale = lora_scale_variable
 
         print("Model and LoRA setup completed successfully.")
 
@@ -920,8 +909,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         head_only_control,
         progress=gr.Progress(),
     ):
-        global controlnet_map, controlnet_map_fn
-   
+        global pipe, current_lora_models
+
         if face_image_path is None:
             raise gr.Error(f"Cannot find any input face image! Please upload the face image")
 
@@ -933,7 +922,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         prompt, negative_prompt = apply_style(style_name, prompt, negative_prompt)
 
         face_image = load_image(face_image_path)
-        face_image = resize_img(face_image,size=(width_target, height_target))
+        face_image = resize_img(face_image, size=(width_target, height_target))
         face_image_cv2 = convert_from_image_to_cv2(face_image)
         height, width, _ = face_image_cv2.shape
 
@@ -942,13 +931,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         if len(face_info) == 0:
             raise gr.Error(f"Unable to detect a face in the image. Please upload a different photo with a clear face.")
 
-        face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*(x['bbox'][3]-x['bbox'][1]))[-1] # only use the maximum face
+        face_info = sorted(face_info, key=lambda x: (x['bbox'][2] - x['bbox'][0]) * (x['bbox'][3] - x['bbox'][1]))[-1]  # only use the maximum face
         face_emb = face_info["embedding"]
         face_kps = draw_kps(convert_from_cv2_to_image(face_image_cv2), face_info["kps"])
         img_controlnet = face_image
+
         if pose_image_path is not None:
             pose_image = load_image(pose_image_path)
-            pose_image = resize_img(pose_image,size=(width_target, height_target))
+            pose_image = resize_img(pose_image, size=(width_target, height_target))
             img_controlnet = pose_image
             pose_image_cv2 = convert_from_image_to_cv2(pose_image)
 
@@ -971,7 +961,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale)      
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale)
         set_ip_adapter(adapter_strength_ratio)
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
 
@@ -983,16 +973,16 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         print("Start inference...")
         print(f"[Debug] Prompt: {prompt}, \n[Debug] Neg Prompt: {negative_prompt}")
-    
-        with torch.no_grad():        
+
+        with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=dtype):
                 for i in range(num_images):
-                    progress(i / num_images, desc=f"Generating image {i+1}/{num_images}")
+                    progress(i / num_images, desc=f"Generating image {i + 1}/{num_images}")
                     if randomize_seed or num_images > 1:
                         seed = random.randint(0, MAX_SEED)
-                
+
                     generator = torch.Generator(device=pipe.device).manual_seed(seed)
-                
+
                     iteration_start_time = time.time()
                     result_images = pipe(
                         prompt=prompt,
@@ -1006,7 +996,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         controlnet_selection=controlnet_selection,
                         guidance_scale=guidance_scale,
                         height=height_target,
-                        width=width_target,                
+                        width=width_target,
                         generator=generator,
                         face_info=face_info,
                         end_cfg=guidance_threshold,
@@ -1058,10 +1048,10 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
                     iteration_end_time = time.time()
                     iteration_time = iteration_end_time - iteration_start_time
-                    print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")            
-                    if num_images > 1 and  ENABLE_CPU_OFFLOAD:                 
+                    print(f"Image {i + 1}/{num_images} generated in {iteration_time:.2f} seconds.")
+                    if num_images > 1 and ENABLE_CPU_OFFLOAD:
                         restart_cpu_offload(adapter_strength_ratio)
-        
+
         total_time = time.time() - start_time
         average_time_per_image = total_time / num_images if num_images else 0
         clean_memory()
@@ -1232,7 +1222,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     .gradio-container {width: 85% !important}
     """
     with gr.Blocks(css=css) as demo:
-        with gr.Tab("InstantId - V19"):
+        with gr.Tab("InstantId - V20"):
             gr.Markdown(title)
             gr.Markdown(description)
             
@@ -1302,7 +1292,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         step=0.05,
                         value=1.0,
                     )
-                        lora_scale.change(fn=update_lora_scale, inputs=[lora_scale])                  
+                                        
                         with gr.Column():
                             model_dropdown = gr.Dropdown(label="Select model from models folder", choices=model_names, value=None)
                             btn_open_outputs = gr.Button("Open Outputs Folder")
