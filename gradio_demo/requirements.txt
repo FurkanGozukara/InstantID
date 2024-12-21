@@ -16,3 +16,4 @@ controlnet_aux
 gdown
 peft
 mediapipe
+torch==2.5.0
