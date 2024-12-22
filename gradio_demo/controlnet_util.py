@@ -4,7 +4,7 @@ from PIL import Image
 from controlnet_aux import OpenposeDetector
 import cv2
 from diffusers.models import ControlNetModel
-
+import os
 from depth_anything.dpt import DepthAnything
 from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
 
@@ -28,9 +28,14 @@ def load_controlnet(pretrained_model_folder, dtype):
     controlnet_identity_model = f"checkpoints/ControlNetModel"
     
     openpose_model = "lllyasviel/ControlNet" if not pretrained_model_folder else fr"{pretrained_model_folder}/lllyasviel/Annotators"        
-    controlnet_pose_model = "thibaud/controlnet-openpose-sdxl-1.0" if not pretrained_model_folder else fr"{pretrained_model_folder}/thibaud/controlnet-openpose-sdxl-1.0"
-    controlnet_canny_model = "diffusers/controlnet-canny-sdxl-1.0" if not pretrained_model_folder else fr"{pretrained_model_folder}/diffusers/controlnet-canny-sdxl-1.0"
-    controlnet_depth_model = "diffusers/controlnet-depth-sdxl-1.0-small" if not pretrained_model_folder else fr"{pretrained_model_folder}/diffusers/controlnet-depth-sdxl-1.0-small"
+    #controlnet_pose_model = "thibaud/controlnet-openpose-sdxl-1.0" if not pretrained_model_folder else fr"{pretrained_model_folder}/thibaud/controlnet-openpose-sdxl-1.0"
+    controlnet_pose_model = os.path.join("xinsir_controlnet", "controlnet-openpose-sdxl-1.0")
+
+    #controlnet_canny_model = "diffusers/controlnet-canny-sdxl-1.0" if not pretrained_model_folder else fr"{pretrained_model_folder}/diffusers/controlnet-canny-sdxl-1.0"
+    controlnet_canny_model = os.path.join("xinsir_controlnet", "controlnet-canny-sdxl-1.0")
+
+    #controlnet_depth_model = "diffusers/controlnet-depth-sdxl-1.0-small" if not pretrained_model_folder else fr"{pretrained_model_folder}/diffusers/controlnet-depth-sdxl-1.0-small"
+    controlnet_depth_model = os.path.join("xinsir_controlnet", "controlnet-depth-sdxl-1.0")
 
     openpose = OpenposeDetector.from_pretrained(openpose_model).to("cpu")
 

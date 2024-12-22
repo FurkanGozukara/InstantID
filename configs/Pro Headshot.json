@@ -14,7 +14,7 @@
   ],
   "guidance_scale": 2.5,
   "seed": 854708084,
-  "randomize_seed": false,
+  "randomize_seed": true,
   "scheduler": "DPMSolverMultistepScheduler-Karras",
   "enable_LCM": false,
   "enhance_face_region": true,
