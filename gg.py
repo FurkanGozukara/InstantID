@@ -3,6 +3,15 @@ import subprocess
 import os
 import platform
 
+import os
+import requests
+from tqdm import tqdm
+from huggingface_hub import snapshot_download
+import subprocess
+
+# Set environment variable for faster HF downloads
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+
 def install_huggingface_hub():
     subprocess.check_call([sys.executable, "-m", "pip", "install", "huggingface_hub>=0.25.2"])
 
