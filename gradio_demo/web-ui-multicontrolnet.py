@@ -581,7 +581,8 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
         print("xformers enabled successfully")
     except Exception as e:
         print(f"Could not enable xformers: {e}")
-        print("Continuing without xformers. This may result in slower performance or higher memory usage.")
+        print("Falling back to SDPA.")
+        pipe.enable_sdpa()
 
     pipe.enable_vae_slicing()
     pipe.enable_vae_tiling() 
