@@ -19,7 +19,7 @@
   "enable_LCM": false,
   "enhance_face_region": true,
   "model_input": "",
-  "model_dropdown": "RealVisXL_V4.safetensors",
+  "model_dropdown": "RealVisXL_V4.0.safetensors",
   "width": 1280,
   "height": 1280,
   "num_images": 1,
