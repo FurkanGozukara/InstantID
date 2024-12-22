@@ -576,7 +576,12 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     clean_memory()  
     
     #if load_mode != '4bit' :
-    pipe.enable_xformers_memory_efficient_attention()
+    try:
+        pipe.enable_xformers_memory_efficient_attention()
+        print("xformers enabled successfully")
+    except Exception as e:
+        print(f"Could not enable xformers: {e}")
+        print("Continuing without xformers. This may result in slower performance or higher memory usage.")
 
     pipe.enable_vae_slicing()
     pipe.enable_vae_tiling() 
