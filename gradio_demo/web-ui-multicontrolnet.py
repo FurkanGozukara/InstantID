@@ -279,6 +279,7 @@ parser.add_argument("--lowvram", action="store_true", help="Enable CPU offload f
 parser.add_argument("--fp16", action="store_true", help="fp16")
 parser.add_argument("--load_mode", default=None, type=str, choices=["4bit", "8bit"], help="Quantization mode for optimization memory consumption")
 parser.add_argument("--share", action="store_true", help="Enable Gradio app sharing")
+parser.add_argument("--kaggle", action="store_true", help="Use Kaggle-specific initialization")
 parser.add_argument(
 "--loras_path", type=str, default=None
 )
@@ -318,11 +319,14 @@ pipe = None
 controlnet = None
 
 # Load face encoder
-app = FaceAnalysis(
-    name="antelopev2",
-    root="./",
-    providers=["CPUExecutionProvider"],
-)
+if args.kaggle:
+    app = FaceAnalysis(name='buffalo_l', root='./models', providers=['CPUExecutionProvider'])
+else:
+    app = FaceAnalysis(
+        name="antelopev2",
+        root="./",
+        providers=["CPUExecutionProvider"],
+    )
 app.prepare(ctx_id=0, det_size=(640, 640))
 
 # Path to InstantID models
