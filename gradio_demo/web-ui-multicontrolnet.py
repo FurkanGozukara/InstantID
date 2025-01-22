@@ -1224,7 +1224,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     """
 
     description = r"""
-    <b>Only available to Premium Members and latest version : https://www.patreon.com/posts/1-click-very-gui-97769887<br>
+    <b>Only available to Premium Members and latest version : https://www.patreon.com/posts/118469722<br>
 
     How to use:<br>
     1. Upload an image with a face. For images with multiple faces, we will only detect the largest face. Ensure the face is not too small and is clearly visible without significant obstructions or blurring.
