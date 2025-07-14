@@ -407,6 +407,14 @@ def set_metadata_settings(image_path):
         scheduler = metadata.get("Used Scheduler", "EulerDiscreteScheduler")
         head_only_control = metadata.get("Apply Head-Only Control to", "").split(", ") if len(metadata.get("Apply Head-Only Control to", "")) > 1 else []
         
+        # BlockSwap parameters
+        enable_blockswap = metadata.get("BlockSwap Enabled", "False") == "True"
+        blockswap_debug = metadata.get("BlockSwap Debug Mode", "False") == "True"
+        blockswap_blocks = int(metadata.get("BlockSwap Blocks to Swap", "2"))
+        blockswap_down = metadata.get("BlockSwap Down Blocks", "True") == "True"
+        blockswap_mid = metadata.get("BlockSwap Mid Block", "True") == "True"
+        blockswap_up = metadata.get("BlockSwap Up Blocks", "True") == "True"
+        blockswap_nonblocking = metadata.get("BlockSwap Non-blocking Transfer", "True") == "True"
 
     updates = [gr.update(value=prompt), gr.update(value=negative_prompt), gr.update(value=enable_LCM), gr.update(value=depth_type), gr.update(value=identitynet_strength_ratio), gr.update(value=adapter_strength_ratio), gr.update(value=pose_strength), gr.update(value=canny_strength), gr.update(value=depth_strength), gr.update(value=controlnet_selection), gr.update(value=model_dropdown), gr.update(value=model_input), gr.update(value=lora_model_dropdown), gr.update(value=width_target), gr.update(value=height_target), gr.update(value=style_name), gr.update(value=num_steps), gr.update(value=guidance_scale), gr.update(value=guidance_threshold), gr.update(value=seed), gr.update(value=enhance_face_region), gr.update(value=scheduler)]
 
@@ -423,6 +431,16 @@ def set_metadata_settings(image_path):
     lora_scale = float(metadata.get("LoRA Scale", "1.0"))
     updates.append(gr.update(value=lora_scale))
     updates.append(gr.update(value=head_only_control))
+    
+    # Add BlockSwap parameters to updates
+    updates.append(gr.update(value=enable_blockswap))
+    updates.append(gr.update(value=blockswap_debug))
+    updates.append(gr.update(value=blockswap_blocks))
+    updates.append(gr.update(value=blockswap_down))
+    updates.append(gr.update(value=blockswap_mid))
+    updates.append(gr.update(value=blockswap_up))
+    updates.append(gr.update(value=blockswap_nonblocking))
+    
     return tuple(updates)
 
 
@@ -1159,6 +1177,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     meta.add_text("Enhance non-face region", str(enhance_face_region))
                     meta.add_text("Used Scheduler", str(scheduler))
                     meta.add_text("Apply Head-Only Control to", ", ".join(head_only_control))
+                    # BlockSwap parameters
+                    meta.add_text("BlockSwap Enabled", str(enable_blockswap))
+                    meta.add_text("BlockSwap Debug Mode", str(blockswap_debug))
+                    meta.add_text("BlockSwap Blocks to Swap", str(blockswap_blocks))
+                    meta.add_text("BlockSwap Down Blocks", str(blockswap_down))
+                    meta.add_text("BlockSwap Mid Block", str(blockswap_mid))
+                    meta.add_text("BlockSwap Up Blocks", str(blockswap_up))
+                    meta.add_text("BlockSwap Non-blocking Transfer", str(blockswap_nonblocking))
                     image.save(output_path, "PNG", pnginfo=meta)
                     images_generated.append(image)
 
@@ -1723,7 +1749,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                 fn=refresh_lists,
                 outputs=[checkpoint_files, lora_files]
             )
-        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control])
+        set_metadata_button.click(fn=set_metadata_settings, inputs=[metadata_image_input], outputs=[prompt, negative_prompt, enable_LCM, depth_type, identitynet_strength_ratio, adapter_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, model_dropdown, model_input, lora_model_dropdown, width, height, style, num_steps, guidance_scale, guidance_threshold, seed, enhance_face_region, scheduler, face_file, pose_file,lora_scale,head_only_control,enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking])
         
         generate_all_styles_button.click(
             fn=generate_all_variations,
