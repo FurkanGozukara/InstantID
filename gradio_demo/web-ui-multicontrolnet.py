@@ -603,34 +603,55 @@ def load_model(pretrained_model_folder, model_name):
             feature_extractor=None,
         )
         
+    # Apply quantization with improved status messages
     if load_mode == '4bit':
-        print("Applying 4-bit quantization...")
-        print("  - Quantizing UNet only...")
-        quantize_4bit(pipe.unet)
-        #quantize_4bit(pipe.controlnet)
-        # Skip text encoders for now to isolate UNet quantization
-        # if pipe.text_encoder is not None:
-        #     print("  - Quantizing Text Encoder...")
-        #     quantize_4bit(pipe.text_encoder)
-        # if pipe.text_encoder_2 is not None:
-        #     print("  - Quantizing Text Encoder 2...")
-        #     quantize_4bit(pipe.text_encoder_2)
-        print("  - Text encoders and VAE kept in full precision")
-        print("4-bit quantization complete!")
+        quantization_status = []
+        
+        def progress_callback(message):
+            quantization_status.append(message)
+            print(message)
+        
+        print("🚀 Starting 4-bit quantization...")
+        print("=" * 50)
+        
+        # Quantize UNet
+        quantize_4bit(pipe.unet, "UNet", progress_callback)
+        
+        # Quantize Text Encoders (but not VAE)
+        if hasattr(pipe, 'text_encoder') and pipe.text_encoder is not None:
+            quantize_4bit(pipe.text_encoder, "Text Encoder 1", progress_callback)
+        
+        if hasattr(pipe, 'text_encoder_2') and pipe.text_encoder_2 is not None:
+            quantize_4bit(pipe.text_encoder_2, "Text Encoder 2", progress_callback)
+        
+        # Quantize IP Adapter when loaded (will be handled in set_ip_adapter)
+        print("=" * 50)
+        print("✅ 4-bit quantization complete!")
+        print("📊 VAE kept in full precision for quality")
+        
     elif load_mode == '8bit':
-        print("Applying 8-bit quantization...")
-        print("  - Quantizing UNet only...")
-        quantize_8bit(pipe.unet)
-        #quantize_8bit(pipe.controlnet)
-        # Skip text encoders for now to isolate UNet quantization
-        # if pipe.text_encoder is not None:
-        #     print("  - Quantizing Text Encoder...")
-        #     quantize_8bit(pipe.text_encoder)
-        # if pipe.text_encoder_2 is not None:
-        #     print("  - Quantizing Text Encoder 2...")
-        #     quantize_8bit(pipe.text_encoder_2)
-        print("  - Text encoders and VAE kept in full precision")
-        print("8-bit quantization complete!")     
+        quantization_status = []
+        
+        def progress_callback(message):
+            quantization_status.append(message)
+            print(message)
+        
+        print("🚀 Starting 8-bit quantization...")
+        print("=" * 50)
+        
+        # Quantize UNet
+        quantize_8bit(pipe.unet, "UNet", progress_callback)
+        
+        # Quantize Text Encoders (but not VAE)
+        if hasattr(pipe, 'text_encoder') and pipe.text_encoder is not None:
+            quantize_8bit(pipe.text_encoder, "Text Encoder 1", progress_callback)
+        
+        if hasattr(pipe, 'text_encoder_2') and pipe.text_encoder_2 is not None:
+            quantize_8bit(pipe.text_encoder_2, "Text Encoder 2", progress_callback)
+        
+        print("=" * 50)
+        print("✅ 8-bit quantization complete!")
+        print("📊 VAE kept in full precision for quality")
 
     return pipe
 	
@@ -652,22 +673,28 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
 
     clean_memory()  
     
-    #if load_mode != '4bit' :
+    # Enable xformers for better performance (compatible with quantization)
     try:
         pipe.enable_xformers_memory_efficient_attention()
-        print("xformers enabled successfully")
+        print("✅ xformers enabled successfully")
     except Exception as e:
-        print(f"Could not enable xformers: {e}")
-        print("Falling back to SDPA.")
+        print(f"⚠️ Could not enable xformers: {e}")
+        print("🔄 Falling back to SDPA for attention.")
         pipe.enable_sdpa()
 
     pipe.enable_vae_slicing()
-    pipe.enable_vae_tiling() 
+    pipe.enable_vae_tiling()
 
 def set_ip_adapter(adapter_strength_ratio):    
     pipe.load_ip_adapter_instantid(face_adapter,scale=adapter_strength_ratio)   
-    #if pipe.image_proj_model != None and  load_mode == '4bit':
-    #    quantize_4bit(pipe.image_proj_model)
+    
+    # Quantize IP adapter if quantization mode is enabled
+    if pipe.image_proj_model is not None and load_mode == '4bit':
+        print("🔄 Quantizing IP Adapter...")
+        quantize_4bit(pipe.image_proj_model, "IP Adapter", lambda msg: print(msg))
+    elif pipe.image_proj_model is not None and load_mode == '8bit':
+        print("🔄 Quantizing IP Adapter...")
+        quantize_8bit(pipe.image_proj_model, "IP Adapter", lambda msg: print(msg))
 
     pipe.set_ip_adapter_scale(adapter_strength_ratio)
  
@@ -823,7 +850,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     def restart_cpu_offload(adapter_strength_ratio):
         
-        #if load_mode != '4bit' :
+        # Temporarily disable xformers during CPU offload restart
         pipe.disable_xformers_memory_efficient_attention()
 
         set_ip_adapter(adapter_strength_ratio)            
@@ -831,7 +858,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         optionally_disable_offloading(pipe)
         clean_memory()
         pipe.enable_model_cpu_offload()
-        #if load_mode != '4bit' :
+        
+        # Re-enable xformers after CPU offload (compatible with quantization)
         pipe.enable_xformers_memory_efficient_attention()
 
     def toggle_lcm_ui(value):
