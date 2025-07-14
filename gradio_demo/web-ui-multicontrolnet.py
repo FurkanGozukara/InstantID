@@ -38,6 +38,7 @@ from common.util import clean_memory
 
 import gradio as gr
 from downloader import ensure_libraries, download_file
+from blockswap_xl import apply_block_swap_to_unet, cleanup_blockswap, get_block_swap_memory_info, print_memory_summary, optimize_memory_for_blockswap
 
 CONFIG_DIR = "configs"
 LATEST_CONFIG_FILE = "latest_config.txt"
@@ -74,7 +75,14 @@ def save_config(config_name, *args):
         "depth_type": args[22],
         "lora_model_dropdown": args[23],
         "lora_scale": args[24],
-        "head_only_control": args[25]
+        "head_only_control": args[25],
+        "enable_blockswap": args[26],
+        "blockswap_debug": args[27],
+        "blockswap_blocks": args[28],
+        "blockswap_down": args[29],
+        "blockswap_mid": args[30],
+        "blockswap_up": args[31],
+        "blockswap_nonblocking": args[32]
     }
     
     filename = f"{config_name}.json"
@@ -95,14 +103,14 @@ def load_config(config_name):
     if not config_name:
         with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
             f.write("")
-        return [gr.update()] * 26  # Return no updates if no config is selected
+        return [gr.update()] * 33  # Return no updates if no config is selected
     
     filename = f"{config_name}.json"
     filepath = os.path.join(CONFIG_DIR, filename)
     
     if not os.path.exists(filepath):
         print(f"Config file {filename} not found.")
-        return [gr.update()] * 26
+        return [gr.update()] * 33
     
     with open(filepath, 'r') as f:
         config = json.load(f)
@@ -137,7 +145,14 @@ def load_config(config_name):
         gr.update(value=config["depth_type"]),
         gr.update(value=config["lora_model_dropdown"]),
         gr.update(value=config["lora_scale"]),
-        gr.update(value=config["head_only_control"])
+        gr.update(value=config["head_only_control"]),
+        gr.update(value=config.get("enable_blockswap", False)),
+        gr.update(value=config.get("blockswap_debug", False)),
+        gr.update(value=config.get("blockswap_blocks", 2)),
+        gr.update(value=config.get("blockswap_down", True)),
+        gr.update(value=config.get("blockswap_mid", True)),
+        gr.update(value=config.get("blockswap_up", True)),
+        gr.update(value=config.get("blockswap_nonblocking", True))
     ]
 
 def get_config_list():
@@ -669,7 +684,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
     _pretrained_model_folder = pretrained_model_folder
 
    
-    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable, test_all_loras=False, single_lora=None):
+    def reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, with_LCM, depth_type, lora_model_dropdown, lora_scale_variable, test_all_loras=False, single_lora=None, enable_blockswap=False, blockswap_debug=False, blockswap_blocks=2, blockswap_down=True, blockswap_mid=True, blockswap_up=True, blockswap_nonblocking=True):
         global pipe, last_loaded_model, last_loaded_scheduler, last_loaded_depth_estimator, last_LCM_status, current_lora_models, current_lora_scale
 
         model_input = model_input.strip() if model_input else None
@@ -694,6 +709,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             load_controlnet_open_pose(pretrained_model_folder)
             load_depth_estimator(pretrained_model_folder, depth_type)
             clean_memory()
+            if enable_blockswap:
+                optimize_memory_for_blockswap()
 
             pipe = load_model(_pretrained_model_folder, model_to_load)
             last_loaded_model = model_to_load
@@ -751,6 +768,36 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
             current_lora_scale = lora_scale_variable
 
         print("Model and LoRA setup completed successfully.")
+        
+        # Apply BlockSwap if enabled
+        if enable_blockswap and blockswap_blocks > 0:
+            print(f"🔄 Applying BlockSwap: {blockswap_blocks} blocks")
+            
+            # Clean up any existing BlockSwap first
+            if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
+                cleanup_blockswap(pipe)
+            
+            # Configure BlockSwap
+            block_swap_config = {
+                "blocks_to_swap": blockswap_blocks,
+                "swap_down_blocks": blockswap_down,
+                "swap_mid_block": blockswap_mid,
+                "swap_up_blocks": blockswap_up,
+                "use_non_blocking": blockswap_nonblocking,
+                "enable_debug": blockswap_debug
+            }
+            
+            # Apply BlockSwap to the pipeline
+            apply_block_swap_to_unet(pipe, block_swap_config)
+            
+            # Log memory info if debug is enabled
+            if blockswap_debug:
+                print_memory_summary(pipe)
+        else:
+            # Clean up BlockSwap if it was previously active
+            if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
+                print("🔄 Disabling BlockSwap")
+                cleanup_blockswap(pipe)
 
 
 
@@ -960,6 +1007,13 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         lora_model_dropdown,
         lora_scale,
         head_only_control,
+        enable_blockswap=False,
+        blockswap_debug=False,
+        blockswap_blocks=2,
+        blockswap_down=True,
+        blockswap_mid=True,
+        blockswap_up=True,
+        blockswap_nonblocking=True,
         test_all_loras=False, 
         single_lora=None,
         progress=gr.Progress(),
@@ -1016,7 +1070,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         else:
             control_mask = None
 
-        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale,test_all_loras,single_lora)
+        reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale,test_all_loras,single_lora, enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking)
         set_ip_adapter(adapter_strength_ratio)
         
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
@@ -1520,6 +1574,37 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                             choices=schedulers,
                             value="EulerDiscreteScheduler",
                         )
+                    
+                    # Block Swap Controls for Memory Optimization
+                    with gr.Row():
+                        gr.Markdown("### 🔄 BlockSwap (Memory Optimization)")
+                    with gr.Row():
+                        enable_blockswap = gr.Checkbox(
+                            label="Enable BlockSwap",
+                            value=False,
+                            info="Dynamically swap UNet blocks to reduce VRAM usage. Useful for limited GPU memory."
+                        )
+                        blockswap_debug = gr.Checkbox(
+                            label="Debug Mode",
+                            value=False,
+                            info="Enable debug logging for BlockSwap operations"
+                        )
+                    with gr.Row():
+                        blockswap_blocks = gr.Slider(
+                            label="Blocks to Swap",
+                            minimum=1,
+                            maximum=8,
+                            step=1,
+                            value=2,
+                            info="Number of blocks to swap from each UNet section"
+                        )
+                    with gr.Row():
+                        with gr.Column():
+                            blockswap_down = gr.Checkbox(label="Swap Down Blocks", value=True)
+                            blockswap_mid = gr.Checkbox(label="Swap Mid Block", value=True)
+                        with gr.Column():
+                            blockswap_up = gr.Checkbox(label="Swap Up Blocks", value=True)
+                            blockswap_nonblocking = gr.Checkbox(label="Non-blocking Transfer", value=True)
                 refresh_models.click(
                     fn=refresh_model_names,
                     outputs=[model_dropdown, lora_model_dropdown]
@@ -1555,7 +1640,14 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         depth_type,
                         lora_model_dropdown,
                         lora_scale,
-                        head_only_control
+                        head_only_control,
+                        enable_blockswap,
+                        blockswap_debug,
+                        blockswap_blocks,
+                        blockswap_down,
+                        blockswap_mid,
+                        blockswap_up,
+                        blockswap_nonblocking
                     ],
                     outputs=[gallery, progress_status, seed],
                 )
@@ -1720,7 +1812,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control],
+                    height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                    enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking],
             outputs=[config_dropdown, config_dropdown]
         )
 
@@ -1731,7 +1824,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                     enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking]
         )
 
         refresh_config_btn.click(
@@ -1751,7 +1845,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
-                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control]
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                     enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking]
         )
 
         gr.Markdown(article)
