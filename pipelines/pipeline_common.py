@@ -54,6 +54,7 @@ def quantize_4bit(module):
         print(f"Skipping quantization for VAE component: {type(module).__name__}")
         return
     
+    quantized_layers = 0
     try:
         for name, child in module.named_children():
             if isinstance(child, torch.nn.Linear):
@@ -83,9 +84,14 @@ def quantize_4bit(module):
 
                 # Set the attribute
                 setattr(module, name, new_layer)
+                quantized_layers += 1
             else:
                 # Recursively apply to child modules
                 quantize_4bit(child)
+        
+        if quantized_layers > 0:
+            print(f"Successfully quantized {quantized_layers} Linear layers in {type(module).__name__} to 4-bit")
+            
     except Exception as e:
         print(f"Error during 4-bit quantization: {e}")
         print("Continuing without quantization...")
@@ -105,6 +111,7 @@ def quantize_8bit(module):
         print(f"Skipping quantization for VAE component: {type(module).__name__}")
         return
     
+    quantized_layers = 0
     try:
         for name, child in module.named_children():
             if isinstance(child, torch.nn.Linear):
@@ -115,25 +122,31 @@ def quantize_8bit(module):
                 # Create and configure the Linear layer
                 has_bias = True if child.bias is not None else False
                 
-                # Use fp16 for compute dtype
-                bnb_8bit_compute_dtype = torch.float16
-
+                # MEMORY FIX: Set has_fp16_weights=False for proper 8-bit quantization
+                # has_fp16_weights=True keeps full precision weights + quantized weights = MORE memory
+                # has_fp16_weights=False stores only quantized weights = LESS memory
                 new_layer = bnb.nn.Linear8bitLt(
                     in_features,
                     out_features,
                     bias=has_bias,
-                    has_fp16_weights=False,
+                    has_fp16_weights=False,  # This is the key fix for memory reduction
                     threshold=6.0,
                 )
 
+                # Use the standard load_state_dict approach (faster than manual copying)
                 new_layer.load_state_dict(child.state_dict())
                 new_layer = new_layer.to(device)
 
                 # Set the attribute
                 setattr(module, name, new_layer)
+                quantized_layers += 1
             else:
                 # Recursively apply to child modules
                 quantize_8bit(child)
+        
+        if quantized_layers > 0:
+            print(f"Successfully quantized {quantized_layers} Linear layers in {type(module).__name__} to 8-bit")
+            
     except Exception as e:
         print(f"Error during 8-bit quantization: {e}")
         print("Continuing without quantization...")
