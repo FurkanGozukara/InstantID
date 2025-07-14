@@ -24,7 +24,7 @@ from PIL import Image
 
 import diffusers
 from diffusers.utils import load_image
-from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
+from diffusers.models.controlnets.multicontrolnet import MultiControlNetModel
 from diffusers import AutoencoderKL
 from huggingface_hub import hf_hub_download
 
@@ -974,7 +974,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
         reload_pipe(model_input, model_dropdown, scheduler, adapter_strength_ratio, enable_LCM, depth_type, lora_model_dropdown, lora_scale,test_all_loras,single_lora)
         set_ip_adapter(adapter_strength_ratio)
+        
         control_scales, control_images = set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet)
+        
+        if control_scales is None:
+            print("ERROR: control_scales is None, cannot continue")
+            return [], gr.update(visible=True), seed
 
         output_dir = "outputs"
         os.makedirs(output_dir, exist_ok=True)
@@ -1002,6 +1007,8 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
                         image=control_images,
                         control_mask=control_mask,
                         controlnet_conditioning_scale=control_scales,
+                        control_guidance_start=[0.0] * len(control_scales) if isinstance(control_scales, list) else 0.0,
+                        control_guidance_end=[1.0] * len(control_scales) if isinstance(control_scales, list) else 1.0,
                         num_inference_steps=num_steps,
                         head_only_control=head_only_control,
                         controlnet_selection=controlnet_selection,
@@ -1194,7 +1201,12 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         yield all_images, gr.update(visible=True), gr.update(visible=True, value=final_message)
 
     def set_pipe_controlnet(identitynet_strength_ratio, pose_strength, canny_strength, depth_strength, controlnet_selection, width_target, height_target, face_kps, img_controlnet):
-        global pipe
+        global pipe, controlnet
+        
+        if controlnet is None:
+            print("ERROR: Global controlnet is None! This should not happen.")
+            return None, None
+        
         if len(controlnet_selection) > 0:
             controlnet_scales = {
                 "pose": pose_strength,
