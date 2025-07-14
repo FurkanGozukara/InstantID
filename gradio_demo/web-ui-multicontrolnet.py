@@ -30,7 +30,7 @@ from huggingface_hub import hf_hub_download
 
 from insightface.app import FaceAnalysis
 from style_template import styles
-from pipelines.pipeline_common import quantize_4bit
+from pipelines.pipeline_common import quantize_4bit, quantize_8bit
 from pipelines.pipeline_stable_diffusion_xl_instantid_full import StableDiffusionXLInstantIDPipeline
 from model_util import load_models_xl, get_torch_device
 from controlnet_util import load_controlnet, load_depth_estimator as load_depth, get_depth_map, get_depth_anything_map, get_canny_image
@@ -299,10 +299,33 @@ dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 dtype = dtype if str(device).__contains__("cuda") else torch.float32
 
+# For model loading, we should use standard dtypes
 dtypeQuantize = dtype
 
-if(load_mode in ('4bit','8bit')):
-    dtypeQuantize = torch.float8_e4m3fn
+# Don't use torch.float8_e4m3fn for loading models, only for computation
+# The quantization will be applied after loading using proper quantization functions
+
+# Print quantization mode info and check dependencies
+if load_mode:
+    print(f"Quantization mode: {load_mode}")
+    print(f"Device: {device}")
+    print(f"Compute dtype: {dtype}")
+    print(f"Model loading dtype: {dtypeQuantize}")
+    
+    # Check if bitsandbytes is available
+    try:
+        import bitsandbytes
+        print(f"bitsandbytes version: {bitsandbytes.__version__}")
+    except ImportError:
+        print("ERROR: bitsandbytes not found!")
+        print("Please install bitsandbytes to use quantization:")
+        print("pip install bitsandbytes")
+        print("Continuing without quantization...")
+        load_mode = None
+else:
+    print("No quantization mode selected")
+    print(f"Device: {device}")
+    print(f"Compute dtype: {dtype}")
 
 ENABLE_CPU_OFFLOAD = True if args.lowvram else False
 STYLE_NAMES = list(styles.keys())
@@ -548,12 +571,33 @@ def load_model(pretrained_model_folder, model_name):
         )
         
     if load_mode == '4bit':
+        print("Applying 4-bit quantization...")
+        print("  - Quantizing UNet only...")
         quantize_4bit(pipe.unet)
         #quantize_4bit(pipe.controlnet)
-        if pipe.text_encoder is not None:
-            quantize_4bit(pipe.text_encoder)
-        if pipe.text_encoder_2 is not None:
-            quantize_4bit(pipe.text_encoder_2)     
+        # Skip text encoders for now to isolate UNet quantization
+        # if pipe.text_encoder is not None:
+        #     print("  - Quantizing Text Encoder...")
+        #     quantize_4bit(pipe.text_encoder)
+        # if pipe.text_encoder_2 is not None:
+        #     print("  - Quantizing Text Encoder 2...")
+        #     quantize_4bit(pipe.text_encoder_2)
+        print("  - Text encoders and VAE kept in full precision")
+        print("4-bit quantization complete!")
+    elif load_mode == '8bit':
+        print("Applying 8-bit quantization...")
+        print("  - Quantizing UNet only...")
+        quantize_8bit(pipe.unet)
+        #quantize_8bit(pipe.controlnet)
+        # Skip text encoders for now to isolate UNet quantization
+        # if pipe.text_encoder is not None:
+        #     print("  - Quantizing Text Encoder...")
+        #     quantize_8bit(pipe.text_encoder)
+        # if pipe.text_encoder_2 is not None:
+        #     print("  - Quantizing Text Encoder 2...")
+        #     quantize_8bit(pipe.text_encoder_2)
+        print("  - Text encoders and VAE kept in full precision")
+        print("8-bit quantization complete!")     
 
     return pipe
 	

@@ -677,13 +677,18 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
         # Determine if we're using an fp16-only GPU
         is_fp16_only_gpu = device.type == "cuda" and not torch.cuda.is_bf16_supported()
-        is_8bit_mode = getattr(self.unet, 'dtype', None) == torch.float8_e4m3fn
+        
+        # Check if the model has been quantized by looking for bitsandbytes quantization attributes
+        is_quantized = hasattr(self.unet, 'config') and any(
+            hasattr(param, 'CB') or hasattr(param, 'SCB') or str(type(param)).__contains__('bnb')
+            for param in self.unet.parameters()
+        )
 
         # Get the current dtype of the image_proj_model
         current_dtype = next(self.image_proj_model.parameters()).dtype
 
-        if is_fp16_only_gpu and is_8bit_mode:
-            # Convert input to fp16 for processing
+        if is_fp16_only_gpu and is_quantized:
+            # Convert input to fp16 for processing when using quantized models
             prompt_image_emb = prompt_image_emb.to(device=device, dtype=torch.float16)
         
             # Ensure the image_proj_model is in fp16
@@ -1380,66 +1385,51 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         clean_memory()
         print("")
         if not output_type == "latent":
-            #  # make sure the VAE is in float32 mode, as it overflows in float16
-            # needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
-            # if needs_upcasting:
-            #     self.upcast_vae()                                                
-            #     latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
-                        
-            # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]            
-
-            # # cast back to fp16/bf16 if needed
-            # if needs_upcasting:
-            #     self.vae.to(dtype=self.dtype)  
-
-            if device.type == "cuda":  
-                print(f"VAE cuda mode")
+            # VAE decoding with proper dtype handling for quantized models
+            print(f"VAE decoding mode - device: {device.type}")
+            
+            # Ensure VAE is on the correct device and dtype
+            vae_dtype = next(iter(self.vae.parameters())).dtype
+            original_latent_dtype = latents.dtype
+            print(f"VAE decoding mode - device: {device}")
+            print(f"VAE dtype: {vae_dtype}, Latents dtype: {original_latent_dtype}")
+            
+            # Convert latents to VAE's expected dtype
+            if original_latent_dtype != vae_dtype:
+                print(f"Converting latents from {original_latent_dtype} to {vae_dtype} for VAE compatibility")
+                latents = latents.to(dtype=vae_dtype)
+            else:
+                print("Latents already match VAE dtype")
+            
+            # Make sure the VAE is in float32 mode if force_upcast is enabled, as it overflows in float16
+            needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
+            if needs_upcasting:
+                print("Upcasting VAE to float32 for decoding")
+                self.upcast_vae()
                 latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
-                                # unscale/denormalize the latents
-                # denormalize with the mean and std if available and not None
-                has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
-                has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
-                if has_latents_mean and has_latents_std:
-                    latents_mean = (
-                        torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
-                    )
-                    latents_std = (
-                        torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
-                    )
-                    latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
-                else:
-                    latents = latents / self.vae.config.scaling_factor
+            
+            # Unscale/denormalize the latents
+            # Denormalize with the mean and std if available and not None
+            has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
+            has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
+            if has_latents_mean and has_latents_std:
+                latents_mean = (
+                    torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+                )
+                latents_std = (
+                    torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+                )
+                latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
+            else:
+                latents = latents / self.vae.config.scaling_factor
 
-                image = self.vae.decode(latents, return_dict=False)[0]
-            else:  
-                
-                self.vae.to("cuda")
-                if latents.dtype != torch.float16:
-                    latents = latents.to(torch.float16)
-                #if latents.dtype != self.vae.dtype:
-                #    latents = latents.to(self.vae.dtype)
-                #if(latents.dtype==torch.float16):
-                #    latents = latents.to(torch.float)
-                #    self.vae = self.vae.to(torch.float)
-                print(f"latent dtype {latents.dtype}")
-                print(f"self.vae dtype {self.vae.dtype}")
-            # unscale/denormalize the latents
-            # denormalize with the mean and std if available and not None
-                has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
-                has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
-                if has_latents_mean and has_latents_std:
-                    latents_mean = (
-                        torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
-                    )
-                    latents_std = (
-                        torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
-                    )
-                    latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
-                else:
-                    latents = latents / self.vae.config.scaling_factor
-
-                image = self.vae.decode(latents, return_dict=False)[0]
-                self.vae.to("cpu")
+            # Decode latents to image
+            image = self.vae.decode(latents, return_dict=False)[0]
+            
+            # Cast back to original dtype if needed
+            if needs_upcasting:
+                print("Casting VAE back to original dtype")
+                self.vae.to(dtype=vae_dtype)
         else:
             image = latents
 
