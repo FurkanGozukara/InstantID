@@ -94,30 +94,53 @@ def save_config(config_name, *args):
         f.write(config_name)
     
     config_list = get_config_list()
-    return config_list, config_name
+    print(f"Config '{config_name}' saved successfully. Updated config list: {config_list}")
+    return gr.update(choices=config_list, value=config_name)
+
+def save_config_and_load(config_name, *args):
+    """Save config and return both dropdown update and all form field updates"""
+    if not config_name.strip():
+        raise gr.Error("Please enter a configuration name before saving.")
+    
+    # Save the config first
+    dropdown_update = save_config(config_name, *args)
+    
+    # Then load the config to return all the form updates
+    form_updates = load_config(config_name)
+    
+    # Clear the config name input field and return dropdown update followed by all form updates
+    return [gr.update(value="")] + [dropdown_update] + form_updates
 
 def update_config_dropdown(config_list, selected_config):
         return gr.update(choices=config_list, value=selected_config)
 
 def load_config(config_name):
     if not config_name:
-        with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
-            f.write("")
+        print("No config name provided, returning empty updates")
         return [gr.update()] * 33  # Return no updates if no config is selected
     
     filename = f"{config_name}.json"
     filepath = os.path.join(CONFIG_DIR, filename)
     
     if not os.path.exists(filepath):
-        print(f"Config file {filename} not found.")
+        print(f"Config file {filepath} not found.")
         return [gr.update()] * 33
     
-    with open(filepath, 'r') as f:
-        config = json.load(f)
+    try:
+        with open(filepath, 'r') as f:
+            config = json.load(f)
+        print(f"Successfully loaded config '{config_name}' from {filepath}")
+    except Exception as e:
+        print(f"Error loading config '{config_name}': {str(e)}")
+        return [gr.update()] * 33
     
     # Save the latest used config name
-    with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
-        f.write(config_name)
+    try:
+        with open(os.path.join(CONFIG_DIR, LATEST_CONFIG_FILE), 'w') as f:
+            f.write(config_name)
+        print(f"Updated latest config to: {config_name}")
+    except Exception as e:
+        print(f"Error updating latest config: {str(e)}")
     
     return [
         gr.update(value=config["prompt"]),
@@ -160,8 +183,13 @@ def get_config_list():
         if not os.path.exists(CONFIG_DIR):
             os.makedirs(CONFIG_DIR)
             print(f"Created config directory: {CONFIG_DIR}")
-        config_list = [f.split('.')[0] for f in os.listdir(CONFIG_DIR) if f.endswith('.json') and f.strip()]
-        print(f"Config list: {config_list}")
+        
+        all_files = os.listdir(CONFIG_DIR)
+        config_files = [f for f in all_files if f.endswith('.json') and f.strip() and f != LATEST_CONFIG_FILE]
+        config_list = sorted([f.split('.')[0] for f in config_files])
+        print(f"All files in config dir: {all_files}")
+        print(f"Config files found: {config_files}")
+        print(f"Final config list: {config_list}")
         return config_list
     except Exception as e:
         print(f"Error in get_config_list: {str(e)}")
@@ -173,7 +201,7 @@ def refresh_config_list():
     latest_config = get_latest_config()
     selected_config = latest_config if latest_config in config_list else None
     print(f"Refreshed config list: {config_list}, Selected config: {selected_config}")
-    return config_list
+    return gr.update(choices=config_list, value=selected_config)
 
 
 def get_latest_config():
@@ -1861,14 +1889,19 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         )
 
         save_config_btn.click(
-            fn=save_config,
+            fn=save_config_and_load,
             inputs=[config_name, prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
                     enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking],
-            outputs=[config_dropdown, config_dropdown]
+            outputs=[config_name, config_dropdown, prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
+                     adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
+                     controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
+                     enable_LCM, enhance_face_region, model_input, model_dropdown, width,
+                     height, num_images, guidance_threshold, depth_type, lora_model_dropdown, lora_scale,head_only_control,
+                     enable_blockswap, blockswap_debug, blockswap_blocks, blockswap_down, blockswap_mid, blockswap_up, blockswap_nonblocking]
         )
 
         load_config_btn.click(
@@ -1885,17 +1918,28 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         refresh_config_btn.click(
             fn=refresh_config_list,
             outputs=[config_dropdown]
-        ).then(
-            fn=update_config_dropdown,
-            inputs=[config_dropdown],
-            outputs=[config_dropdown]
         )
 
         # Load the latest config on startup
+        def load_latest_config_on_startup():
+            """Load the latest config and return both dropdown update and form updates"""
+            latest_config = get_latest_config()
+            config_list = get_config_list()
+            selected_config = latest_config if latest_config in config_list else None
+            
+            dropdown_update = gr.update(choices=config_list, value=selected_config)
+            
+            if selected_config:
+                form_updates = load_config(selected_config)
+            else:
+                # Return empty updates if no config to load
+                form_updates = [gr.update()] * 33
+            
+            return [dropdown_update] + form_updates
+        
         demo.load(
-            fn=load_config,
-            inputs=[config_dropdown],
-            outputs=[prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
+            fn=load_latest_config_on_startup,
+            outputs=[config_dropdown, prompt, negative_prompt, style, num_steps, identitynet_strength_ratio,
                      adapter_strength_ratio, pose_strength, canny_strength, depth_strength,
                      controlnet_selection, guidance_scale, seed, randomize_seed, scheduler,
                      enable_LCM, enhance_face_region, model_input, model_dropdown, width,
