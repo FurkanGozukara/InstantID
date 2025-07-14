@@ -844,28 +844,36 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
         
         # Apply BlockSwap if enabled
         if enable_blockswap and blockswap_blocks > 0:
-            print(f"🔄 Applying BlockSwap: {blockswap_blocks} blocks")
-            
-            # Clean up any existing BlockSwap first
-            if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
-                cleanup_blockswap(pipe)
-            
-            # Configure BlockSwap
-            block_swap_config = {
-                "blocks_to_swap": blockswap_blocks,
-                "swap_down_blocks": blockswap_down,
-                "swap_mid_block": blockswap_mid,
-                "swap_up_blocks": blockswap_up,
-                "use_non_blocking": blockswap_nonblocking,
-                "enable_debug": blockswap_debug
-            }
-            
-            # Apply BlockSwap to the pipeline
-            apply_block_swap_to_unet(pipe, block_swap_config)
-            
-            # Log memory info if debug is enabled
-            if blockswap_debug:
-                print_memory_summary(pipe)
+            # Check for CPU offloading compatibility
+            if ENABLE_CPU_OFFLOAD:
+                print("⚠️ WARNING: BlockSwap is not compatible with CPU offloading. Skipping BlockSwap.")
+                print("💡 TIP: To use BlockSwap, disable CPU offloading (remove --lowvram flag)")
+                # Clean up any existing BlockSwap
+                if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
+                    cleanup_blockswap(pipe)
+            else:
+                print(f"🔄 Applying BlockSwap: {blockswap_blocks} blocks")
+                
+                # Clean up any existing BlockSwap first
+                if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
+                    cleanup_blockswap(pipe)
+                
+                # Configure BlockSwap
+                block_swap_config = {
+                    "blocks_to_swap": blockswap_blocks,
+                    "swap_down_blocks": blockswap_down,
+                    "swap_mid_block": blockswap_mid,
+                    "swap_up_blocks": blockswap_up,
+                    "use_non_blocking": blockswap_nonblocking,
+                    "enable_debug": blockswap_debug
+                }
+                
+                # Apply BlockSwap to the pipeline
+                apply_block_swap_to_unet(pipe, block_swap_config)
+                
+                # Log memory info if debug is enabled
+                if blockswap_debug:
+                    print_memory_summary(pipe)
         else:
             # Clean up BlockSwap if it was previously active
             if hasattr(pipe, '_blockswap_active') and pipe._blockswap_active:
