@@ -1,6 +1,21 @@
 import sys
 import itertools
 
+"""
+Multi-GPU Distribution for Kaggle Environment
+
+When using the --kaggle flag, models are automatically distributed across multiple GPUs:
+- Text Encoders (text_encoder, text_encoder_2): GPU 1 (cuda:1)
+- UNet: GPU 0 (cuda:0)
+- VAE: GPU 0 (cuda:0)
+- ControlNet models: GPU 0 (cuda:0)
+- IP Adapter: GPU 0 (cuda:0)
+- Depth Estimator: GPU 0 (cuda:0)
+
+This distribution optimizes memory usage and allows for better utilization of multiple GPUs
+in environments like Kaggle where both GPU 0 and GPU 1 are available.
+"""
+
 from diffusers import StableDiffusionPipeline
 
 sys.path.append("./")
@@ -329,6 +344,10 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+# Make args accessible from other modules
+import __main__
+__main__.args = args
+
 load_mode = args.load_mode
 
 torch.backends.cudnn.allow_tf32 = False
@@ -593,6 +612,34 @@ def load_model(pretrained_model_folder, model_name):
         
         scheduler = diffusers.EulerDiscreteScheduler.from_config(scheduler_kwargs)
         print(f"vae dtype {vae.dtype}")
+        
+        # Multi-GPU distribution for Kaggle
+        if args.kaggle and torch.cuda.device_count() >= 2:
+            print("🔄 Distributing models across multiple GPUs (Kaggle mode)")
+            print(f"📊 Available GPUs: {torch.cuda.device_count()}")
+            
+            # Move text encoders to GPU 1
+            text_encoders[0] = text_encoders[0].to('cuda:1')
+            text_encoders[1] = text_encoders[1].to('cuda:1')
+            print("✅ Text encoders moved to GPU 1")
+            
+            # Move UNet to GPU 0
+            unet = unet.to('cuda:0')
+            print("✅ UNet moved to GPU 0")
+            
+            # Keep VAE on GPU 0 (works with UNet)
+            vae = vae.to('cuda:0')
+            print("✅ VAE kept on GPU 0")
+            
+            # Keep controlnet on GPU 0 (works with UNet)
+            if controlnet is not None:
+                controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
+                print("✅ ControlNet moved to GPU 0")
+            else:
+                controlnet_to_use = [controlnet]
+        else:
+            controlnet_to_use = [controlnet]
+        
         pipe = StableDiffusionXLInstantIDPipeline(            
             vae=vae,
             text_encoder=text_encoders[0],
@@ -601,7 +648,7 @@ def load_model(pretrained_model_folder, model_name):
             tokenizer_2=tokenizers[1],
             unet=unet,
             scheduler=scheduler,
-            controlnet=[controlnet],           
+            controlnet=controlnet_to_use,           
         )
     else:    
         if pretrained_model_folder:
@@ -621,15 +668,45 @@ def load_model(pretrained_model_folder, model_name):
                 "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
         )
         print(f"vae dtype {vae.dtype}")
+        
+        # Multi-GPU distribution for Kaggle
+        if args.kaggle and torch.cuda.device_count() >= 2:
+            print("🔄 Distributing models across multiple GPUs (Kaggle mode)")
+            print(f"📊 Available GPUs: {torch.cuda.device_count()}")
+            
+            # Move UNet to GPU 0
+            unet = unet.to('cuda:0')
+            print("✅ UNet moved to GPU 0")
+            
+            # Keep VAE on GPU 0 (works with UNet)
+            vae = vae.to('cuda:0')
+            print("✅ VAE kept on GPU 0")
+            
+            # Keep controlnet on GPU 0 (works with UNet)
+            if controlnet is not None:
+                controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
+                print("✅ ControlNet moved to GPU 0")
+            else:
+                controlnet_to_use = [controlnet]
+        else:
+            controlnet_to_use = [controlnet]
+        
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
             model_path,
             vae = vae,
             unet = unet,
-            controlnet=[controlnet],
+            controlnet=controlnet_to_use,
             torch_dtype=dtype,
             safety_checker=None,
             feature_extractor=None,
         )
+        
+        # For the from_pretrained case, we need to manually distribute text encoders
+        if args.kaggle and torch.cuda.device_count() >= 2:
+            print("🔄 Moving text encoders to GPU 1 for from_pretrained case")
+            pipe.text_encoder = pipe.text_encoder.to('cuda:1')
+            pipe.text_encoder_2 = pipe.text_encoder_2.to('cuda:1')
+            print("✅ Text encoders moved to GPU 1")
         
     # Apply quantization with improved status messages
     if load_mode == '4bit':
@@ -697,7 +774,15 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
     if with_cpu_offload:                 
         pipe.enable_model_cpu_offload()        
     else:
-        pipe.to(device)
+        # For Kaggle multi-GPU setup, don't move the entire pipe to one device
+        # as components are already distributed across GPUs
+        if args.kaggle and torch.cuda.device_count() >= 2:
+            print("🔄 Maintaining multi-GPU distribution (Kaggle mode)")
+            print(f"📊 Text encoders on: {pipe.text_encoder.device}, {pipe.text_encoder_2.device}")
+            print(f"📊 UNet on: {pipe.unet.device}")
+            print(f"📊 VAE on: {pipe.vae.device}")
+        else:
+            pipe.to(device)
 
     clean_memory()  
     
@@ -715,6 +800,12 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
 
 def set_ip_adapter(adapter_strength_ratio):    
     pipe.load_ip_adapter_instantid(face_adapter,scale=adapter_strength_ratio)   
+    
+    # For Kaggle multi-GPU setup, ensure IP adapter is on the same device as UNet
+    if args.kaggle and torch.cuda.device_count() >= 2:
+        if pipe.image_proj_model is not None:
+            pipe.image_proj_model = pipe.image_proj_model.to('cuda:0')
+            print("✅ IP Adapter moved to GPU 0 (same as UNet)")
     
     # Quantize IP adapter if quantization mode is enabled
     if pipe.image_proj_model is not None and load_mode == '4bit':

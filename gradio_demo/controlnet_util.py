@@ -54,26 +54,71 @@ def load_controlnet(pretrained_model_folder, dtype):
     controlnet_depth = ControlNetModel.from_pretrained(
         controlnet_depth_model, torch_dtype=dtype
     )
+    
+    # Check if we need to handle multi-GPU setup for Kaggle
+    # Import args here to avoid circular imports
+    import sys
+    import argparse
+    
+    # Check if we're in Kaggle mode and have multiple GPUs
+    # We need to access the args from the main module
+    try:
+        import __main__
+        if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
+            print("🔄 Placing ControlNet models on GPU 0 (Kaggle multi-GPU mode)")
+            controlnet_identity = controlnet_identity.to('cuda:0')
+            controlnet_pose = controlnet_pose.to('cuda:0')
+            controlnet_canny = controlnet_canny.to('cuda:0')
+            controlnet_depth = controlnet_depth.to('cuda:0')
+            print("✅ All ControlNet models moved to GPU 0")
+    except:
+        # If we can't access args, just continue with default behavior
+        pass
+    
     return openpose, controlnet_pose, controlnet_canny, controlnet_depth, controlnet_identity
 
 def load_depth_estimator(pretrained_model_folder, device, depth_type):
     global depth_estimator, feature_extractor
     
+    # Check if we're in Kaggle mode and have multiple GPUs
+    # For Kaggle multi-GPU setup, use GPU 0 for depth estimator
+    target_device = device
+    try:
+        import __main__
+        if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
+            target_device = 'cuda:0'
+            print("🔄 Using GPU 0 for depth estimator (Kaggle multi-GPU mode)")
+    except:
+        # If we can't access args, just use the default device
+        pass
+    
     if depth_type == 'LiheYoung/depth_anything':
         depth_estimator = None
         feature_extractor = None
         depth_anything_model = 'LiheYoung/depth_anything_vitl14' if not pretrained_model_folder else fr"{pretrained_model_folder}/LiheYoung/depth_anything_vitl14"
-        depth_estimator = DepthAnything.from_pretrained(depth_anything_model).to(device).eval()
+        depth_estimator = DepthAnything.from_pretrained(depth_anything_model).to(target_device).eval()
     else:
         depth_estimator_model = "Intel/dpt-hybrid-midas" if not pretrained_model_folder else fr"{pretrained_model_folder}/Intel/dpt-hybrid-midas"    
         feature_extractor = DPTImageProcessor.from_pretrained(depth_estimator_model)
-        depth_estimator = DPTForDepthEstimation.from_pretrained(depth_estimator_model).to(device)    
+        depth_estimator = DPTForDepthEstimation.from_pretrained(depth_estimator_model).to(target_device)    
 
     return depth_estimator
 
 def get_depth_map(image):    
-    image = feature_extractor(images=image, return_tensors="pt").pixel_values.to("cuda")
-    with torch.no_grad(), torch.autocast("cuda"):
+    # Determine the device based on where the depth estimator is located
+    device_to_use = "cuda"
+    try:
+        import __main__
+        if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
+            device_to_use = 'cuda:0'  # Use GPU 0 for Kaggle multi-GPU mode
+        elif depth_estimator is not None and hasattr(depth_estimator, 'device'):
+            device_to_use = str(depth_estimator.device)
+    except:
+        # If we can't access args, just use the default device
+        pass
+    
+    image = feature_extractor(images=image, return_tensors="pt").pixel_values.to(device_to_use)
+    with torch.no_grad(), torch.autocast(device_to_use):
         depth_map = depth_estimator(image).predicted_depth
 
     depth_map = torch.nn.functional.interpolate(
@@ -92,6 +137,18 @@ def get_depth_map(image):
     return image
 
 def get_depth_anything_map(image):    
+    # Determine the device based on where the depth estimator is located
+    device_to_use = "cuda"
+    try:
+        import __main__
+        if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
+            device_to_use = 'cuda:0'  # Use GPU 0 for Kaggle multi-GPU mode
+        elif depth_estimator is not None and hasattr(depth_estimator, 'device'):
+            device_to_use = str(depth_estimator.device)
+    except:
+        # If we can't access args, just use the default device
+        pass
+    
     transform = Compose([
     Resize(
         width=518,
@@ -111,18 +168,16 @@ def get_depth_anything_map(image):
     h, w = image.shape[:2]
 
     image = transform({'image': image})['image']
-    image = torch.from_numpy(image).unsqueeze(0).to("cuda")
+    image = torch.from_numpy(image).unsqueeze(0).to(device_to_use)
 
     with torch.no_grad():
         depth = depth_estimator(image)
 
     depth = torch.nn.functional.interpolate(depth[None], (h, w), mode='bilinear', align_corners=False)[0, 0]
     depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
-
+    
     depth = depth.cpu().numpy().astype(np.uint8)
-
     depth_image = Image.fromarray(depth)
-
     return depth_image
 
 def get_canny_image(image, t1=100, t2=200):
