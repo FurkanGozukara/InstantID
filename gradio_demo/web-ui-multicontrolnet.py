@@ -656,57 +656,169 @@ def load_model(pretrained_model_folder, model_name):
         else:
             model_path = model_name
         
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            model_path,
-            torch_dtype=dtypeQuantize,
-        )
-
-        # Access the UNet model from the pipeline
-        unet = pipeline.unet
-        # Load vae
-        vae = AutoencoderKL.from_pretrained(
-                "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
-        )
-        print(f"vae dtype {vae.dtype}")
-        
-        # Multi-GPU distribution for Kaggle
+        # Multi-GPU distribution for Kaggle - load components more carefully
         if args.kaggle and torch.cuda.device_count() >= 2:
             print("🔄 Distributing models across multiple GPUs (Kaggle mode)")
             print(f"📊 Available GPUs: {torch.cuda.device_count()}")
             
-            # Move UNet to GPU 0
-            unet = unet.to('cuda:0')
-            print("✅ UNet moved to GPU 0")
+            # Clean memory before loading
+            clean_memory()
             
-            # Keep VAE on GPU 0 (works with UNet)
-            vae = vae.to('cuda:0')
-            print("✅ VAE kept on GPU 0")
-            
-            # Keep controlnet on GPU 0 (works with UNet)
-            if controlnet is not None:
-                controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
-                print("✅ ControlNet moved to GPU 0")
-            else:
+            try:
+                print("📦 Loading pipeline components with low memory usage...")
+                # Load pipeline with low memory usage to avoid OOM
+                pipeline = StableDiffusionPipeline.from_pretrained(
+                    model_path,
+                    torch_dtype=dtypeQuantize,
+                    low_cpu_mem_usage=True,
+                    variant="fp16" if dtypeQuantize == torch.float16 else None,
+                )
+                
+                # Get components and move them carefully
+                print("🔄 Extracting UNet and moving to GPU 0...")
+                unet = pipeline.unet
+                # Move UNet to GPU 0 first since it's the largest component
+                unet = unet.to('cuda:0')
+                print("✅ UNet moved to GPU 0")
+                
+                # Clean memory after moving UNet
+                clean_memory()
+                
+                print("🔄 Extracting text encoders and moving to GPU 1...")
+                text_encoder = pipeline.text_encoder
+                text_encoder_2 = pipeline.text_encoder_2
+                # Move text encoders to GPU 1
+                text_encoder = text_encoder.to('cuda:1')
+                text_encoder_2 = text_encoder_2.to('cuda:1')
+                print("✅ Text encoders moved to GPU 1")
+                
+                # Clean memory after moving text encoders
+                clean_memory()
+                
+                # Get other components
+                tokenizer = pipeline.tokenizer
+                tokenizer_2 = pipeline.tokenizer_2
+                scheduler = pipeline.scheduler
+                
+                # Load VAE on GPU 0
+                print("🔄 Loading VAE on GPU 0...")
+                vae = AutoencoderKL.from_pretrained(
+                    "madebyollin/sdxl-vae-fp16-fix", 
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                )
+                vae = vae.to('cuda:0')
+                print(f"✅ VAE loaded on GPU 0, dtype: {vae.dtype}")
+                
+                # Keep controlnet on GPU 0 (works with UNet)
+                if controlnet is not None:
+                    controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
+                    print("✅ ControlNet moved to GPU 0")
+                else:
+                    controlnet_to_use = [controlnet]
+                
+                # Create the pipeline with distributed components
+                print("🔄 Creating distributed pipeline...")
+                pipe = StableDiffusionXLInstantIDPipeline(            
+                    vae=vae,
+                    text_encoder=text_encoder,
+                    text_encoder_2=text_encoder_2,
+                    tokenizer=tokenizer,
+                    tokenizer_2=tokenizer_2,
+                    unet=unet,
+                    scheduler=scheduler,
+                    controlnet=controlnet_to_use,
+                    safety_checker=None,
+                    feature_extractor=None,
+                )
+                print("✅ Distributed pipeline created successfully")
+                
+                # Verify multi-GPU distribution
+                print("\n📊 Multi-GPU Distribution Status:")
+                print(f"🔹 Text Encoder 1: {pipe.text_encoder.device}")
+                print(f"🔹 Text Encoder 2: {pipe.text_encoder_2.device}")
+                print(f"🔹 UNet: {pipe.unet.device}")
+                print(f"🔹 VAE: {pipe.vae.device}")
+                if hasattr(pipe, 'controlnet') and pipe.controlnet is not None:
+                    if isinstance(pipe.controlnet, list):
+                        print(f"🔹 ControlNet: {pipe.controlnet[0].device}")
+                    else:
+                        print(f"🔹 ControlNet: {pipe.controlnet.device}")
+                
+                # Show GPU memory usage
+                try:
+                    gpu0_memory = torch.cuda.memory_allocated(0) / 1024**3  # GB
+                    gpu1_memory = torch.cuda.memory_allocated(1) / 1024**3  # GB
+                    print(f"🔹 GPU 0 Memory: {gpu0_memory:.2f} GB")
+                    print(f"🔹 GPU 1 Memory: {gpu1_memory:.2f} GB")
+                except:
+                    pass
+                print("")
+                
+                # Clean up the temporary pipeline
+                del pipeline
+                clean_memory()
+                
+            except torch.cuda.OutOfMemoryError as e:
+                print(f"⚠️ GPU memory error during multi-GPU setup: {e}")
+                print("🔄 Falling back to single GPU mode...")
+                # Clean up any partially loaded components
+                clean_memory()
+                
+                # Fall back to single GPU loading
+                pipeline = StableDiffusionPipeline.from_pretrained(
+                    model_path,
+                    torch_dtype=dtypeQuantize,
+                    low_cpu_mem_usage=True,
+                )
+
+                # Access the UNet model from the pipeline
+                unet = pipeline.unet
+                # Load vae
+                vae = AutoencoderKL.from_pretrained(
+                        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+                )
+                print(f"vae dtype {vae.dtype}")
+                
                 controlnet_to_use = [controlnet]
+                
+                pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
+                    model_path,
+                    vae = vae,
+                    unet = unet,
+                    controlnet=controlnet_to_use,
+                    torch_dtype=dtype,
+                    safety_checker=None,
+                    feature_extractor=None,
+                )
+                print("✅ Fallback to single GPU completed")
+                
         else:
+            # Standard single-GPU loading
+            pipeline = StableDiffusionPipeline.from_pretrained(
+                model_path,
+                torch_dtype=dtypeQuantize,
+            )
+
+            # Access the UNet model from the pipeline
+            unet = pipeline.unet
+            # Load vae
+            vae = AutoencoderKL.from_pretrained(
+                    "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+            )
+            print(f"vae dtype {vae.dtype}")
+            
             controlnet_to_use = [controlnet]
-        
-        pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
-            model_path,
-            vae = vae,
-            unet = unet,
-            controlnet=controlnet_to_use,
-            torch_dtype=dtype,
-            safety_checker=None,
-            feature_extractor=None,
-        )
-        
-        # For the from_pretrained case, we need to manually distribute text encoders
-        if args.kaggle and torch.cuda.device_count() >= 2:
-            print("🔄 Moving text encoders to GPU 1 for from_pretrained case")
-            pipe.text_encoder = pipe.text_encoder.to('cuda:1')
-            pipe.text_encoder_2 = pipe.text_encoder_2.to('cuda:1')
-            print("✅ Text encoders moved to GPU 1")
+            
+            pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(            
+                model_path,
+                vae = vae,
+                unet = unet,
+                controlnet=controlnet_to_use,
+                torch_dtype=dtype,
+                safety_checker=None,
+                feature_extractor=None,
+            )
         
     # Apply quantization with improved status messages
     if load_mode == '4bit':
