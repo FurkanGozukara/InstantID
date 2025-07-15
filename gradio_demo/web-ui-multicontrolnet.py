@@ -667,7 +667,9 @@ def load_model(pretrained_model_folder, model_name):
             try:
                 print("📦 Loading pipeline components with low memory usage...")
                 # Load pipeline with low memory usage to avoid OOM
-                pipeline = StableDiffusionPipeline.from_pretrained(
+                # Use SDXL pipeline for InstantID compatibility
+                from diffusers import StableDiffusionXLPipeline
+                pipeline = StableDiffusionXLPipeline.from_pretrained(
                     model_path,
                     torch_dtype=dtypeQuantize,
                     low_cpu_mem_usage=True,
@@ -766,7 +768,8 @@ def load_model(pretrained_model_folder, model_name):
                 clean_memory()
                 
                 # Fall back to single GPU loading
-                pipeline = StableDiffusionPipeline.from_pretrained(
+                from diffusers import StableDiffusionXLPipeline
+                pipeline = StableDiffusionXLPipeline.from_pretrained(
                     model_path,
                     torch_dtype=dtypeQuantize,
                     low_cpu_mem_usage=True,
@@ -795,7 +798,8 @@ def load_model(pretrained_model_folder, model_name):
                 
         else:
             # Standard single-GPU loading
-            pipeline = StableDiffusionPipeline.from_pretrained(
+            from diffusers import StableDiffusionXLPipeline
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
                 model_path,
                 torch_dtype=dtypeQuantize,
             )
