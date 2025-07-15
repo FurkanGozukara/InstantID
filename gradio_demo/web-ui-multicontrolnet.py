@@ -1620,7 +1620,7 @@ def main(pretrained_model_folder, enable_lcm_arg=False, share=False):
 
     # Description
     title = r"""
-    <h1 align="center">InstantID v27 Next Level: Zero-shot Identity-Preserving Generation in Seconds</h1>
+    <h1 align="center">InstantID Next Level: Zero-shot Identity-Preserving Generation in Seconds</h1>
     """
 
     description = r"""
