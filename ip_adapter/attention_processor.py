@@ -165,18 +165,28 @@ class IPAttnProcessor(nn.Module):
         hidden_states = attn.batch_to_head_dim(hidden_states)
         
         # for ip-adapter
+        # Ensure ip_hidden_states is on the same device as IP adapter components
+        ip_adapter_device = next(self.to_k_ip.parameters()).device
+        ip_hidden_states = ip_hidden_states.to(ip_adapter_device)
+        
         ip_key = self.to_k_ip(ip_hidden_states)
         ip_value = self.to_v_ip(ip_hidden_states)
         
         ip_key = attn.head_to_batch_dim(ip_key)
         ip_value = attn.head_to_batch_dim(ip_value)
         
+        # Move query to IP adapter device for computation
+        query_for_ip = query.to(ip_adapter_device)
+        
         if xformers_available:
-            ip_hidden_states = self._memory_efficient_attention_xformers(query, ip_key, ip_value, None)
+            ip_hidden_states = self._memory_efficient_attention_xformers(query_for_ip, ip_key, ip_value, None)
         else:
-            ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
+            ip_attention_probs = attn.get_attention_scores(query_for_ip, ip_key, None)
             ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
         ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
+
+        # Move ip_hidden_states back to the same device as the original hidden_states for addition
+        ip_hidden_states = ip_hidden_states.to(hidden_states.device)
 
         # region control
         if len(region_control.prompt_image_conditioning) == 1:
@@ -400,23 +410,33 @@ class IPAttnProcessor2_0(torch.nn.Module):
         hidden_states = hidden_states.to(query.dtype)
 
         # for ip-adapter
+        # Ensure ip_hidden_states is on the same device as IP adapter components
+        ip_adapter_device = next(self.to_k_ip.parameters()).device
+        ip_hidden_states = ip_hidden_states.to(ip_adapter_device)
+        
         ip_key = self.to_k_ip(ip_hidden_states)
         ip_value = self.to_v_ip(ip_hidden_states)
 
         ip_key = ip_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         ip_value = ip_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
+        # Move query to IP adapter device for computation
+        query_for_ip = query.to(ip_adapter_device)
+
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
         # TODO: add support for attn.scale when we move to Torch 2.1
         ip_hidden_states = F.scaled_dot_product_attention(
-            query, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
+            query_for_ip, ip_key, ip_value, attn_mask=None, dropout_p=0.0, is_causal=False
         )
         with torch.no_grad():
-            self.attn_map = query @ ip_key.transpose(-2, -1).softmax(dim=-1)
+            self.attn_map = query_for_ip @ ip_key.transpose(-2, -1).softmax(dim=-1)
             #print(self.attn_map.shape)
 
         ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         ip_hidden_states = ip_hidden_states.to(query.dtype)
+
+        # Move ip_hidden_states back to the same device as the original hidden_states for addition
+        ip_hidden_states = ip_hidden_states.to(hidden_states.device)
 
         # region control
         if len(region_control.prompt_image_conditioning) == 1:

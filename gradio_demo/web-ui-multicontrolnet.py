@@ -730,8 +730,6 @@ def load_model(pretrained_model_folder, model_name):
                     unet=unet,
                     scheduler=scheduler,
                     controlnet=controlnet_to_use,
-                    safety_checker=None,
-                    feature_extractor=None,
                 )
                 print("✅ Distributed pipeline created successfully")
                 
@@ -791,8 +789,6 @@ def load_model(pretrained_model_folder, model_name):
                     unet = unet,
                     controlnet=controlnet_to_use,
                     torch_dtype=dtype,
-                    safety_checker=None,
-                    feature_extractor=None,
                 )
                 print("✅ Fallback to single GPU completed")
                 
@@ -820,8 +816,6 @@ def load_model(pretrained_model_folder, model_name):
                 unet = unet,
                 controlnet=controlnet_to_use,
                 torch_dtype=dtype,
-                safety_checker=None,
-                feature_extractor=None,
             )
         
     # Apply quantization with improved status messages

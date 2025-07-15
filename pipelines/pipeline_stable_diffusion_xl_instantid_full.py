@@ -1175,6 +1175,9 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_embeds = prompt_embeds.to(_device)
         add_text_embeds = add_text_embeds.to(_device)
         add_time_ids = add_time_ids.to(_device).repeat(batch_size * num_images_per_prompt, 1)
+        
+        # Ensure prompt_image_emb is on the same device as prompt_embeds for concatenation
+        prompt_image_emb = prompt_image_emb.to(_device)
         encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb], dim=1)
 
         # 8. Denoising loop
@@ -1330,6 +1333,26 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
                         mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
+                    # For multi-GPU mode, ensure all tensors are on the UNet's device
+                    unet_device = next(self.unet.parameters()).device
+                    
+                    # Move all tensors to UNet's device if needed
+                    latent_model_input = latent_model_input.to(unet_device)
+                    t = t.to(unet_device)
+                    encoder_hidden_states = encoder_hidden_states.to(unet_device)
+                    
+                    if timestep_cond is not None:
+                        timestep_cond = timestep_cond.to(unet_device)
+                    
+                    # Move ControlNet outputs to UNet's device
+                    down_block_res_samples = [sample.to(unet_device) for sample in down_block_res_samples]
+                    mid_block_res_sample = mid_block_res_sample.to(unet_device)
+                    
+                    # Move added_cond_kwargs to UNet's device
+                    for key, value in added_cond_kwargs.items():
+                        if torch.is_tensor(value):
+                            added_cond_kwargs[key] = value.to(unet_device)
+
                     # predict the noise residual
                     noise_pred = self.unet(
                         latent_model_input,
@@ -1351,6 +1374,12 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     if do_classifier_free_guidance and guidance_rescale > 0.0:
                         # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                         noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+
+                    # Ensure all tensors are on the same device for scheduler step
+                    # Use the latents device as the target device (should be same as UNet)
+                    target_device = latents.device
+                    noise_pred = noise_pred.to(target_device)
+                    t = t.to(target_device)
 
                     # compute the previous noisy sample x_t -> x_t-1
                     latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
