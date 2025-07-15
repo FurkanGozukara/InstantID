@@ -65,12 +65,12 @@ def load_controlnet(pretrained_model_folder, dtype):
     try:
         import __main__
         if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
-            print("🔄 Placing ControlNet models on GPU 0 (Kaggle multi-GPU mode)")
-            controlnet_identity = controlnet_identity.to('cuda:0')
-            controlnet_pose = controlnet_pose.to('cuda:0')
-            controlnet_canny = controlnet_canny.to('cuda:0')
-            controlnet_depth = controlnet_depth.to('cuda:0')
-            print("✅ All ControlNet models moved to GPU 0")
+            print("🔄 Placing ControlNet models on GPU 1 (Kaggle multi-GPU mode)")
+            controlnet_identity = controlnet_identity.to('cuda:1')
+            controlnet_pose = controlnet_pose.to('cuda:1')
+            controlnet_canny = controlnet_canny.to('cuda:1')
+            controlnet_depth = controlnet_depth.to('cuda:1')
+            print("✅ All ControlNet models moved to GPU 1")
     except:
         # If we can't access args, just continue with default behavior
         pass
@@ -81,13 +81,13 @@ def load_depth_estimator(pretrained_model_folder, device, depth_type):
     global depth_estimator, feature_extractor
     
     # Check if we're in Kaggle mode and have multiple GPUs
-    # For Kaggle multi-GPU setup, use GPU 0 for depth estimator
+    # For Kaggle multi-GPU setup, use GPU 1 for depth estimator
     target_device = device
     try:
         import __main__
         if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
-            target_device = 'cuda:0'
-            print("🔄 Using GPU 0 for depth estimator (Kaggle multi-GPU mode)")
+            target_device = 'cuda:1'
+            print("🔄 Using GPU 1 for depth estimator (Kaggle multi-GPU mode)")
     except:
         # If we can't access args, just use the default device
         pass
@@ -110,7 +110,7 @@ def get_depth_map(image):
     try:
         import __main__
         if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
-            device_to_use = 'cuda:0'  # Use GPU 0 for Kaggle multi-GPU mode
+            device_to_use = 'cuda:1'  # Use GPU 1 for Kaggle multi-GPU mode
         elif depth_estimator is not None and hasattr(depth_estimator, 'device'):
             device_to_use = str(depth_estimator.device)
     except:
@@ -142,7 +142,7 @@ def get_depth_anything_map(image):
     try:
         import __main__
         if hasattr(__main__, 'args') and __main__.args.kaggle and torch.cuda.device_count() >= 2:
-            device_to_use = 'cuda:0'  # Use GPU 0 for Kaggle multi-GPU mode
+            device_to_use = 'cuda:1'  # Use GPU 1 for Kaggle multi-GPU mode
         elif depth_estimator is not None and hasattr(depth_estimator, 'device'):
             device_to_use = str(depth_estimator.device)
     except:

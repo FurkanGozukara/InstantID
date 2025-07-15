@@ -6,14 +6,14 @@ Multi-GPU Distribution for Kaggle Environment
 
 When using the --kaggle flag, models are automatically distributed across multiple GPUs:
 - Text Encoders (text_encoder, text_encoder_2): GPU 1 (cuda:1)
+- ControlNet models (pose, canny, depth): GPU 1 (cuda:1)
+- Depth Estimator: GPU 1 (cuda:1)
+- IP Adapter: GPU 1 (cuda:1)
 - UNet: GPU 0 (cuda:0)
 - VAE: GPU 0 (cuda:0)
-- ControlNet models: GPU 0 (cuda:0)
-- IP Adapter: GPU 0 (cuda:0)
-- Depth Estimator: GPU 0 (cuda:0)
 
-This distribution optimizes memory usage and allows for better utilization of multiple GPUs
-in environments like Kaggle where both GPU 0 and GPU 1 are available.
+This distribution optimizes memory usage by keeping the largest models (UNet, VAE) on GPU 0
+and the text processing and control components on GPU 1.
 """
 
 from diffusers import StableDiffusionPipeline
@@ -631,10 +631,10 @@ def load_model(pretrained_model_folder, model_name):
             vae = vae.to('cuda:0')
             print("✅ VAE kept on GPU 0")
             
-            # Keep controlnet on GPU 0 (works with UNet)
+            # Keep controlnet on GPU 1 (works with text encoders)
             if controlnet is not None:
-                controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
-                print("✅ ControlNet moved to GPU 0")
+                controlnet_to_use = [controlnet.to('cuda:1')] if isinstance(controlnet, list) else [controlnet.to('cuda:1')]
+                print("✅ ControlNet moved to GPU 1")
             else:
                 controlnet_to_use = [controlnet]
         else:
@@ -710,10 +710,10 @@ def load_model(pretrained_model_folder, model_name):
                 vae = vae.to('cuda:0')
                 print(f"✅ VAE loaded on GPU 0, dtype: {vae.dtype}")
                 
-                # Keep controlnet on GPU 0 (works with UNet)
+                # Keep controlnet on GPU 1 (works with text encoders)
                 if controlnet is not None:
-                    controlnet_to_use = [controlnet.to('cuda:0')] if isinstance(controlnet, list) else [controlnet.to('cuda:0')]
-                    print("✅ ControlNet moved to GPU 0")
+                    controlnet_to_use = [controlnet.to('cuda:1')] if isinstance(controlnet, list) else [controlnet.to('cuda:1')]
+                    print("✅ ControlNet moved to GPU 1")
                 else:
                     controlnet_to_use = [controlnet]
                 
@@ -749,8 +749,8 @@ def load_model(pretrained_model_folder, model_name):
                 try:
                     gpu0_memory = torch.cuda.memory_allocated(0) / 1024**3  # GB
                     gpu1_memory = torch.cuda.memory_allocated(1) / 1024**3  # GB
-                    print(f"🔹 GPU 0 Memory: {gpu0_memory:.2f} GB")
-                    print(f"🔹 GPU 1 Memory: {gpu1_memory:.2f} GB")
+                    print(f"🔹 GPU 0 Memory (UNet+VAE): {gpu0_memory:.2f} GB")
+                    print(f"🔹 GPU 1 Memory (Text+ControlNet): {gpu1_memory:.2f} GB")
                 except:
                     pass
                 print("")
@@ -890,9 +890,8 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
         # as components are already distributed across GPUs
         if args.kaggle and torch.cuda.device_count() >= 2:
             print("🔄 Maintaining multi-GPU distribution (Kaggle mode)")
-            print(f"📊 Text encoders on: {pipe.text_encoder.device}, {pipe.text_encoder_2.device}")
-            print(f"📊 UNet on: {pipe.unet.device}")
-            print(f"📊 VAE on: {pipe.vae.device}")
+            print(f"📊 GPU 0 (UNet+VAE): {pipe.unet.device}, {pipe.vae.device}")
+            print(f"📊 GPU 1 (Text+ControlNet): {pipe.text_encoder.device}, {pipe.text_encoder_2.device}")
         else:
             pipe.to(device)
 
@@ -913,11 +912,11 @@ def assign_last_params(adapter_strength_ratio, with_cpu_offload):
 def set_ip_adapter(adapter_strength_ratio):    
     pipe.load_ip_adapter_instantid(face_adapter,scale=adapter_strength_ratio)   
     
-    # For Kaggle multi-GPU setup, ensure IP adapter is on the same device as UNet
+    # For Kaggle multi-GPU setup, ensure IP adapter is on the same device as text encoders
     if args.kaggle and torch.cuda.device_count() >= 2:
         if pipe.image_proj_model is not None:
-            pipe.image_proj_model = pipe.image_proj_model.to('cuda:0')
-            print("✅ IP Adapter moved to GPU 0 (same as UNet)")
+            pipe.image_proj_model = pipe.image_proj_model.to('cuda:1')
+            print("✅ IP Adapter moved to GPU 1 (same as text encoders)")
     
     # Quantize IP adapter if quantization mode is enabled
     if pipe.image_proj_model is not None and load_mode == '4bit':
